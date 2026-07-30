@@ -15,11 +15,11 @@ import {
   View,
 } from "react-native";
 
-import CalendarScreen from "../screens/calendar/calendar";
+import Comunidad from "../screens/Comunidad/Comunidad";
 import Home from "../screens/home/home";
-import MapScreen from "../screens/map/map";
-import ProfileStack from "../screens/profile";
-import ReservationsScreen from "../screens/reservations/reservations";
+import Busqueda from "../screens/Busqueda/Busqueda";
+import AgendaScreen from "../screens/Agenda/Agenda";
+import Favoritos from "../screens/Favoritos/Favoritos";
 
 const Tab = createBottomTabNavigator();
 
@@ -28,12 +28,9 @@ const COLOR_TEAL = "#2EAD9A";
 const COLOR_ORANGE = "#D96E32";
 const COLOR_INACTIVE = "#9AA3A8";
 
-// Ruta central destacada (mismo nombre de ruta que antes: "calendario")
-const CENTER_ROUTE_NAME = "calendario";
+// Ruta central destacada 
+const CENTER_ROUTE_NAME = "comunidad";
 
-/**
- * Barra inferior flotante personalizada
- */
 function FloatingTabBar({ state, descriptors, navigation }: BottomTabBarProps) {
   return (
     <View style={styles.tabBarWrapper} pointerEvents="box-none">
@@ -151,7 +148,7 @@ export default function TabLayout() {
         headerShown: false,
       }}
     >
-      {/* INICIO — misma ruta "home", mismo componente Home */}
+      {/* INICIO*/}
       <Tab.Screen
         name="home"
         component={Home}
@@ -164,10 +161,10 @@ export default function TabLayout() {
         }}
       />
 
-      {/* BÚSQUEDA — misma ruta "Busqueda", mismo componente MapScreen */}
+      {/* BÚSQUEDA*/}
       <Tab.Screen
         name="Busqueda"
-        component={MapScreen}
+        component={Busqueda}
         options={{
           tabBarLabel: "Búsqueda",
 
@@ -177,10 +174,10 @@ export default function TabLayout() {
         }}
       />
 
-      {/* COMUNIDAD — BOTÓN CENTRAL — misma ruta "calendario", mismo componente CalendarScreen */}
+      {/* COMUNIDAD*/}
       <Tab.Screen
-        name="calendario"
-        component={CalendarScreen}
+        name="comunidad"
+        component={Comunidad}
         options={{
           tabBarLabel: "Comunidad",
 
@@ -190,10 +187,10 @@ export default function TabLayout() {
         }}
       />
 
-      {/* FAVORITOS — misma ruta "reservas", mismo componente ReservationsScreen */}
+      {/* FAVORITOS*/}
       <Tab.Screen
         name="reservas"
-        component={ReservationsScreen}
+        component={Favoritos}
         options={{
           tabBarLabel: "Favoritos",
 
@@ -203,10 +200,10 @@ export default function TabLayout() {
         }}
       />
 
-      {/* AGENDA — misma ruta "profile", mismo componente ProfileStack */}
-      <Tab.Screen
-        name="profile"
-        component={ProfileStack}
+      {/* AGENDA */}    
+     <Tab.Screen
+        name="agenda"
+        component={AgendaScreen}
         options={{
           tabBarLabel: "Agenda",
 

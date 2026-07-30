@@ -1,0 +1,23 @@
+[33mf2ff75a[m[33m ([m[1;36mHEAD[m[33m -> [m[1;32mmain[m[33m, [m[1;31morigin/main[m[33m, [m[1;31morigin/HEAD[m[33m)[m feat: rediseño de Home y actualización de la estructura de navegación
+[33m7f40653[m feat: primer commit limpio para NovaPrime Hackathon 2026
+[33ma475a5d[m restore floating button from backup
+[33m3dacdff[m Se mejoro la muestra de datos en Promociones y Para Ti, mejora de la logica para traer datos Recomenda para el usuario
+[33mc6f30ea[m Se corrijieron errores, del area de experiencia
+[33mb9f4505[m se agregaron screen de experiencias, se mejoro el area de calendario permitiendo mejor visibilidad y filtracion
+[33m166d16f[m Se corrijieron errores de la screen reservations, se mejoro la parte visual
+[33m3dbb83e[m[33m ([m[1;32mbackup-before-remove-d03f36a[m[33m)[m Se mejoro la validacion de datos de usuario y se agrego servicio de artesanias
+[33md03f36a[m area de promociones funcional, vista de detalles, screen de reserva e edicion para reservas
+[33m9439d2d[m Se agregaron mensajes de cuido a la naturaleza, area de recomendaciones, cambios en el header
+[33m257d3fe[m Se agregaron las screen de servicios, se agregaron datos de firebase al calendario
+[33m1ad3389[m Se agregaron screen para la seccion de servicios con datos de ejemplos, pendiente de conexion con firebase
+[33mf5063e9[m feat(map): se actualizo la screen de mapa, se agrego un mapa interactivo con comunicacion a la base de datos
+[33m73d1a87[m feat: Se realizaron vinculaciones con imagenes en el home y se editó la screen de map
+[33m44e94d6[m Se hiceron mejoras en el logo del home y mejoras en el welcome
+[33m662c589[m se mejoro el codigo de Welcome.js ademas se integro una nueva tipografia
+[33m17360b6[m Se agrego WelcomeSlide, la bienvenida al usuario
+[33m7729020[m feat: se ha mejorado la forma de registro, login y edicion de perfil con la firebase
+[33ma6c5816[m se corrigieron errores, se agrego una nueva screen (Calendar) falta corregir 1 error
+[33m5f33abe[m Actualización de perfil: login, registro y perfil detallado, mejoras en home
+[33md1ac857[m se agregaron nuevas screens: perfil, register, reservas, entre otras...
+[33ma2a3821[m Screens base creadas para menú inferior (Home, Map, Profile, Calendar, Reservations)
+[33m7f84bc5[m Prueba de commit - Proyecto DeViajeNew (sin credenciales)

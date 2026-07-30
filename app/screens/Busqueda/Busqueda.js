@@ -2,8 +2,8 @@
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
 import { collection, doc, getDoc, onSnapshot } from 'firebase/firestore';
-import React, { useEffect, useMemo, useState } from 'react';
-import {ActivityIndicator, Dimensions, Image, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View} from 'react-native';
+import { useEffect, useMemo, useState } from 'react';
+import { ActivityIndicator, Dimensions, Image, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
 import { db } from '../../../firebaseConfig';
 
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
