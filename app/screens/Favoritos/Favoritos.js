@@ -1,92 +1,93 @@
 import { MaterialCommunityIcons } from '@expo/vector-icons';
-import { useRouter } from 'expo-router';
+import { useNavigation } from '@react-navigation/native';
 import { onAuthStateChanged } from 'firebase/auth';
 import {
-    collection,
-    onSnapshot,
-    orderBy,
-    query,
-    Timestamp,
-    where,
+  collection,
+  doc,
+  getDoc,
+  onSnapshot,
+  query,
+  updateDoc,
+  where,
 } from 'firebase/firestore';
 import React, { useEffect, useMemo, useState } from 'react';
 import {
-    Dimensions,
-    Image,
-    Modal,
-    Platform,
-    SafeAreaView,
-    ScrollView,
-    StatusBar,
-    StyleSheet,
-    Text,
-    TouchableOpacity,
-    View
+  ActivityIndicator,
+  Alert,
+  Dimensions,
+  Image,
+  Modal,
+  Platform,
+  SafeAreaView,
+  ScrollView,
+  StatusBar,
+  StyleSheet,
+  Text,
+  TextInput,
+  TouchableOpacity,
+  View,
 } from 'react-native';
-import MapView, { Marker, PROVIDER_GOOGLE } from 'react-native-maps';
 import { auth, db } from '../../../firebaseConfig';
 
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
 
+// Paleta de color de la app
 const COLOR_TEAL = '#2EAD9A';
 const COLOR_ORANGE = '#D96E32';
+const COLOR_OLIVE = '#8FB32E';
 const COLOR_TEAL_SOFT = '#D9F0EC';
 const COLOR_TEXT_DARK = '#222';
 const COLOR_TEXT_MUTED = '#7A8489';
 
 const HORIZONTAL_PADDING = 18;
+const CARD_GAP = 12;
+const GRID_CARD_WIDTH = (SCREEN_WIDTH - HORIZONTAL_PADDING * 2 - CARD_GAP) / 2;
 const CAROUSEL_CARD_WIDTH = Math.round(SCREEN_WIDTH * 0.6);
 const ANDROID_STATUSBAR_HEIGHT = StatusBar.currentHeight || 24;
 
-const MESES = [
-  'Enero', 'Febrero', 'Marzo', 'Abril', 'Mayo', 'Junio',
-  'Julio', 'Agosto', 'Septiembre', 'Octubre', 'Noviembre', 'Diciembre',
+// Chips de categoría para la búsqueda
+const CATEGORY_CHIPS = [
+  { label: 'Todos', slug: 'todos', icon: 'view-grid-outline' },
+  { label: 'Artesanías', slug: 'artesania', icon: 'palette' },
+  { label: 'Gastronomía', slug: 'gastronomia', icon: 'food' },
+  { label: 'Naturaleza', slug: 'naturaleza', icon: 'leaf' },
+  { label: 'Tradición', slug: 'tradiciones', icon: 'account-group' },
 ];
 
-const DIAS_SEMANA = ['D', 'L', 'M', 'M', 'J', 'V', 'S'];
-
-const DEPARTAMENTOS_NI = [
-  'Todos',
-  'Boaco', 'Carazo', 'Chinandega', 'Chontales', 'Estelí',
-  'Granada', 'Jinotega', 'León', 'Madriz', 'Managua',
-  'Masaya', 'Matagalpa', 'Nueva Segovia', 'Río San Juan', 'Rivas',
-  'Región Autónoma de la Costa Caribe Norte',
-  'Región Autónoma de la Costa Caribe Sur',
+// Chips de estado (los 5 filtros originales de esta pantalla)
+const STATUS_FILTERS = [
+  { key: 'todos', label: 'Todos', icon: 'view-grid-outline' },
+  { key: 'reservados', label: 'Reservados', icon: 'check-circle-outline' },
+  { key: 'guardados', label: 'Guardados', icon: 'heart-outline' },
+  { key: 'enProceso', label: 'En proceso', icon: 'progress-clock' },
+  { key: 'porReservar', label: 'Por reservar', icon: 'calendar-plus' },
 ];
+const STATUS_CATEGORY_FILTERS = STATUS_FILTERS.filter((f) => f.key !== 'todos');
 
-const CATEGORIAS = {
-  Gastronomía: '#D96E32', 
-  Historia: '#6a4c93',
-  Artesanías: '#8d6e63',
-  Música: '#c2185b',
-  Tradiciones: '#2EAD9A',
-  Naturaleza: '#8FB32E',
-};
-
-function fechaKey(date) {
-  const y = date.getFullYear();
-  const m = String(date.getMonth() + 1).padStart(2, '0');
-  const d = String(date.getDate()).padStart(2, '0');
-  return `${y}-${m}-${d}`;
+function actionLabelFor(categoryKey) {
+  switch (categoryKey) {
+    case 'reservados':
+      return 'Ver detalles';
+    case 'enProceso':
+      return 'Ver estado';
+    case 'porReservar':
+      return 'Reservar';
+    case 'guardados':
+    default:
+      return 'Ver detalles';
+  }
 }
 
-function generarDiasDelMes(year, month) {
-  const primerDia = new Date(year, month, 1);
-  const ultimoDia = new Date(year, month + 1, 0);
-  const dias = [];
-
-  for (let i = 0; i < primerDia.getDay(); i++) {
-    dias.push(null);
-  }
-  for (let d = 1; d <= ultimoDia.getDate(); d++) {
-    dias.push(new Date(year, month, d));
-  }
-  return dias;
+function badgeColorFor(estado) {
+  if (estado === 'Confirmada') return { bg: '#eafaf1', border: '#219653', text: '#219653' };
+  if (estado === 'Pendiente') return { bg: '#fffbe6', border: '#B49B0E', text: '#B49B0E' };
+  return { bg: '#eceff1', border: '#9AA3A8', text: '#607d8b' };
 }
 
-export default function AgendaScreen() {
-  const router = useRouter();
+export default function FavoritosScreen() {
+  const navigation = useNavigation();
 
+  const [userId, setUserId] = useState(auth.currentUser?.uid || null);
   const [userName, setUserName] = useState(
     auth.currentUser
       ? auth.currentUser.displayName ||
@@ -94,8 +95,26 @@ export default function AgendaScreen() {
       : 'Invitado',
   );
 
+  const [search, setSearch] = useState('');
+  const [showSuggestions, setShowSuggestions] = useState(false);
+  const [activeCategory, setActiveCategory] = useState('todos');
+  const [activeStatusFilter, setActiveStatusFilter] = useState('todos');
+
+  const [reservas, setReservas] = useState([]);
+  const [loadingReservas, setLoadingReservas] = useState(true);
+  const [favoritos, setFavoritos] = useState([]);
+  const [loadingFavoritos, setLoadingFavoritos] = useState(true);
+  const [heartOn, setHeartOn] = useState({});
+
+  const [promo, setPromo] = useState(null);
+
+  const [showModal, setShowModal] = useState(false);
+  const [selectedItem, setSelectedItem] = useState(null);
+  const [verifying, setVerifying] = useState(false);
+
   useEffect(() => {
     const unsubAuth = onAuthStateChanged(auth, (user) => {
+      setUserId(user ? user.uid : null);
       setUserName(
         user
           ? user.displayName || (user.email ? user.email.split('@')[0] : 'Usuario')
@@ -105,92 +124,361 @@ export default function AgendaScreen() {
     return () => unsubAuth();
   }, []);
 
-  const hoy = new Date();
-  const [mesActual, setMesActual] = useState(hoy.getMonth());
-  const [anioActual, setAnioActual] = useState(hoy.getFullYear());
-  const [diaSeleccionado, setDiaSeleccionado] = useState(hoy);
-
-  const [eventos, setEventos] = useState([]);
-  const [eventoSeleccionado, setEventoSeleccionado] = useState(null);
-
-  const [departamentoFiltro, setDepartamentoFiltro] = useState('Todos');
-  const [showMenu, setShowMenu] = useState(false);
-  const [showDeptModal, setShowDeptModal] = useState(false);
-
+  // Reservas: misma lógica dual (UsuarioId legacy / userId nuevo)
   useEffect(() => {
-    const inicioMes = new Date(anioActual, mesActual, 1, 0, 0, 0);
-    const finMes = new Date(anioActual, mesActual + 1, 0, 23, 59, 59);
-
-    let q = query(
-      collection(db, 'eventos'),
-      where('fecha', '>=', Timestamp.fromDate(inicioMes)),
-      where('fecha', '<=', Timestamp.fromDate(finMes)),
-      orderBy('fecha', 'asc')
-    );
-
-    const unsubscribe = onSnapshot(q, (snapshot) => {
-      const lista = snapshot.docs.map((docSnap) => {
-        const data = docSnap.data();
-        return {
-          id: docSnap.id,
-          ...data,
-          fechaJS: data.fecha?.toDate ? data.fecha.toDate() : new Date(data.fecha),
-        };
-      });
-      setEventos(lista);
-    }, (err) => {
-      console.log('Error cargando eventos:', err);
-    });
-
-    return () => unsubscribe();
-  }, [mesActual, anioActual]);
-
-  const eventosFiltrados = useMemo(() => {
-    if (departamentoFiltro === 'Todos') return eventos;
-    return eventos.filter((e) => e.departamento === departamentoFiltro);
-  }, [eventos, departamentoFiltro]);
-
-  const eventosPorDia = useMemo(() => {
-    const mapa = {};
-    eventosFiltrados.forEach((e) => {
-      const key = fechaKey(e.fechaJS);
-      if (!mapa[key]) mapa[key] = new Set();
-      mapa[key].add(e.categoria);
-    });
-    return mapa;
-  }, [eventosFiltrados]);
-
-  const eventosDelDiaSeleccionado = useMemo(() => {
-    const key = fechaKey(diaSeleccionado);
-    return eventosFiltrados.filter((e) => fechaKey(e.fechaJS) === key);
-  }, [eventosFiltrados, diaSeleccionado]);
-
-  useEffect(() => {
-    setEventoSeleccionado(eventosDelDiaSeleccionado[0] || null);
-  }, [eventosDelDiaSeleccionado]);
-
-  const eventosProximos = useMemo(() => {
-    return [...eventosFiltrados]
-      .filter((e) => e.fechaJS >= new Date(hoy.getFullYear(), hoy.getMonth(), hoy.getDate()))
-      .sort((a, b) => a.fechaJS - b.fechaJS)
-      .slice(0, 6);
-  }, [eventosFiltrados]);
-
-  const diasDelMes = useMemo(() => generarDiasDelMes(anioActual, mesActual), [anioActual, mesActual]);
-
-  const cambiarMes = (delta) => {
-    let nuevoMes = mesActual + delta;
-    let nuevoAnio = anioActual;
-    if (nuevoMes < 0) {
-      nuevoMes = 11;
-      nuevoAnio -= 1;
-    } else if (nuevoMes > 11) {
-      nuevoMes = 0;
-      nuevoAnio += 1;
+    if (!userId) {
+      setReservas([]);
+      setLoadingReservas(false);
+      return;
     }
-    setMesActual(nuevoMes);
-    setAnioActual(nuevoAnio);
+    const reservasRef = collection(db, 'Reservas');
+    const qLegacy = query(reservasRef, where('UsuarioId', '==', userId));
+    const qNew = query(reservasRef, where('userId', '==', userId));
+
+    let snapLegacy = [];
+    let snapNew = [];
+
+    const combineAndSet = () => {
+      const map = new Map();
+      [...snapLegacy, ...snapNew].forEach((d) => map.set(d.id, d));
+      const merged = Array.from(map.values()).map((docItem) => {
+        const d = docItem.data();
+        const titulo = d.Titulo || d.title || d.titulo || d.nombre || 'Reserva';
+        const tipo = d.Tipo || d.tipo || d.Type || 'Paquete';
+        const estado = d.Estado || d.status || d.estado || 'Pendiente';
+        let fecha = '';
+        if (d.FechaReserva && d.FechaReserva.toDate)
+          fecha = d.FechaReserva.toDate().toLocaleDateString();
+        else if (d.reserveDate && typeof d.reserveDate === 'string')
+          fecha = d.reserveDate.split(' ')[0];
+        else if (d.reserveDate && d.reserveDate.toDate)
+          fecha = d.reserveDate.toDate().toLocaleDateString();
+        const lugar = d.Lugar || d.lugar || d.place || '';
+        const precio = d.Precio || d.price || 0;
+        const imagenURL = d.ImagenURL || d.imagen || d.Imagen || null;
+        return { id: docItem.id, titulo, tipo, estado, fecha, lugar, precio, imagenURL };
+      });
+      setReservas(merged);
+      setLoadingReservas(false);
+    };
+
+    const unsubLegacy = onSnapshot(qLegacy, (snapshot) => {
+      snapLegacy = snapshot.docs;
+      combineAndSet();
+    });
+    const unsubNew = onSnapshot(qNew, (snapshot) => {
+      snapNew = snapshot.docs;
+      combineAndSet();
+    });
+
+    return () => {
+      unsubLegacy();
+      unsubNew();
+    };
+  }, [userId]);
+
+  // Favoritos: colección "Favoritos"
+  useEffect(() => {
+    if (!userId) {
+      setFavoritos([]);
+      setLoadingFavoritos(false);
+      return;
+    }
+    const ref = collection(db, 'Favoritos');
+    const q = query(ref, where('UsuarioId', '==', userId));
+    const unsub = onSnapshot(
+      q,
+      (snap) => {
+        const mapped = snap.docs.map((d) => {
+          const v = d.data();
+          return {
+            id: d.id,
+            nombre: v.Nombre || v.nombre || 'Elemento guardado',
+            categoria: v.Categoria || v.categoria || '',
+            lugar: v.Lugar || v.lugar || '',
+            precio: v.Precio || v.precio || null,
+            imagenURL: v.ImagenURL || v.imagenURL || null,
+            estadoFavorito: v.Estado || v.estado || 'guardado',
+          };
+        });
+        setFavoritos(mapped);
+        setLoadingFavoritos(false);
+      },
+      (err) => {
+        console.warn('Error cargando Favoritos:', err);
+        setLoadingFavoritos(false);
+      },
+    );
+    return () => unsub();
+  }, [userId]);
+
+  // Tarjeta promocional / CTA — igual patrón que la de Búsqueda, otro documento
+  useEffect(() => {
+    const fetchPromo = async () => {
+      try {
+        const promoRef = doc(db, 'Promociones', 'Promo_005');
+        const promoSnap = await getDoc(promoRef);
+        if (promoSnap.exists()) setPromo(promoSnap.data());
+      } catch (e) {
+        console.warn('Error cargando promoción de Favoritos', e);
+      }
+    };
+    fetchPromo();
+  }, []);
+
+  function normalizeReserva(r, categoryKey) {
+    return {
+      id: r.id,
+      categoryKey,
+      name: r.titulo,
+      imageURL: r.imagenURL,
+      secondary: [r.lugar, r.fecha].filter(Boolean).join(' • '),
+      price: r.precio ? `C$ ${r.precio}` : null,
+      badge: r.estado,
+      category: (r.tipo || '').toLowerCase(),
+    };
+  }
+
+  function normalizeFavorito(f, categoryKey) {
+    return {
+      id: f.id,
+      categoryKey,
+      name: f.nombre,
+      imageURL: f.imagenURL,
+      secondary: f.categoria || f.lugar || '',
+      price: f.precio ? `C$ ${f.precio}` : null,
+      badge: null,
+      category: (f.categoria || '').toLowerCase(),
+    };
+  }
+
+  const sections = useMemo(() => {
+    const reservados = reservas
+      .filter((r) => r.estado === 'Confirmada')
+      .map((r) => normalizeReserva(r, 'reservados'));
+    const enProceso = reservas
+      .filter((r) => r.estado === 'Pendiente')
+      .map((r) => normalizeReserva(r, 'enProceso'));
+    const guardados = favoritos
+      .filter((f) => f.estadoFavorito !== 'porReservar')
+      .map((f) => normalizeFavorito(f, 'guardados'));
+    const porReservar = favoritos
+      .filter((f) => f.estadoFavorito === 'porReservar')
+      .map((f) => normalizeFavorito(f, 'porReservar'));
+    return { reservados, guardados, enProceso, porReservar };
+  }, [reservas, favoritos]);
+
+  const allItems = useMemo(
+    () => [
+      ...sections.reservados,
+      ...sections.guardados,
+      ...sections.enProceso,
+      ...sections.porReservar,
+    ],
+    [sections],
+  );
+
+  const term = search.trim().toLowerCase();
+
+  const categoryChipLabelNormalized = (slug) => {
+    const chip = CATEGORY_CHIPS.find((c) => c.slug === slug);
+    return chip ? chip.label.toLowerCase().replace('í', 'i').replace('ó', 'o') : '';
   };
+
+  function matchesSearchAndCategory(item) {
+    const matchesSearch =
+      !term ||
+      item.name.toLowerCase().includes(term) ||
+      (item.secondary || '').toLowerCase().includes(term);
+    const matchesCategory =
+      activeCategory === 'todos' ||
+      (item.category || '').includes(categoryChipLabelNormalized(activeCategory));
+    return matchesSearch && matchesCategory;
+  }
+
+  const filteredSections = {
+    reservados: sections.reservados.filter(matchesSearchAndCategory),
+    guardados: sections.guardados.filter(matchesSearchAndCategory),
+    enProceso: sections.enProceso.filter(matchesSearchAndCategory),
+    porReservar: sections.porReservar.filter(matchesSearchAndCategory),
+  };
+
+  // Sugerencias del dropdown de búsqueda
+  const suggestions = useMemo(() => {
+    if (!term) return [];
+    return allItems.filter((i) => i.name.toLowerCase().includes(term)).slice(0, 5);
+  }, [term, allItems]);
+
+  const loading = loadingReservas || loadingFavoritos;
+  const allEmpty =
+    !loading && Object.values(filteredSections).every((arr) => arr.length === 0);
+
+  const activeItems =
+    activeStatusFilter !== 'todos' ? filteredSections[activeStatusFilter] : [];
+
+  function openDetail(item) {
+    setSelectedItem(item);
+    setShowModal(true);
+  }
+
+  function toggleHeart(id) {
+    setHeartOn((prev) => ({ ...prev, [id]: !prev[id] }));
+  }
+
+  async function verifyPayment(item) {
+    if (!item || item.categoryKey !== 'enProceso') return;
+    setVerifying(true);
+    try {
+      const reservaDoc = doc(db, 'Reservas', item.id);
+      await updateDoc(reservaDoc, { Estado: 'Confirmada', PagoVerificado: true });
+      Alert.alert('Pago verificado', 'La reserva fue marcada como confirmada.');
+      setShowModal(false);
+    } catch (e) {
+      Alert.alert('Error', 'No se pudo verificar el pago: ' + (e.message || String(e)));
+    } finally {
+      setVerifying(false);
+    }
+  }
+
+  function goExplore() {
+    // Navega a la pestaña de Búsqueda (React Navigation, no Expo Router)
+    navigation.navigate('Busqueda');
+  }
+
+  function handlePressSuggestion(item) {
+    setSearch(item.name);
+    setShowSuggestions(false);
+  }
+
+  function renderEmptyState() {
+    return (
+      <View style={styles.emptyState}>
+        <View style={styles.emptyIconCircle}>
+          <MaterialCommunityIcons name="compass-outline" size={34} color={COLOR_TEAL} />
+        </View>
+        <Text style={styles.emptyTitle}>Todavía no hay nada aquí</Text>
+        <Text style={styles.emptySubtitle}>
+          Hay tanto por descubrir de nuestra cultura y tradiciones
+        </Text>
+        <TouchableOpacity style={styles.emptyBtn} activeOpacity={0.85} onPress={goExplore}>
+          <Text style={styles.emptyBtnText}>Ir a Búsqueda</Text>
+        </TouchableOpacity>
+      </View>
+    );
+  }
+
+  function renderCarouselCard(item) {
+    const badge = badgeColorFor(item.badge);
+    const isFav = !!heartOn[item.id];
+    return (
+      <TouchableOpacity
+        key={item.id}
+        style={styles.carouselCard}
+        activeOpacity={0.9}
+        onPress={() => openDetail(item)}
+      >
+        <View style={styles.carouselImageWrap}>
+          {item.imageURL ? (
+            <Image source={{ uri: item.imageURL }} style={styles.carouselImage} resizeMode="cover" />
+          ) : (
+            <View style={[styles.carouselImage, styles.imagePlaceholder]}>
+              <MaterialCommunityIcons name="image-outline" size={24} color="#c7d0d6" />
+            </View>
+          )}
+          {item.badge ? (
+            <View style={[styles.statusBadge, { backgroundColor: badge.bg, borderColor: badge.border }]}>
+              <Text style={[styles.statusBadgeText, { color: badge.text }]}>{item.badge}</Text>
+            </View>
+          ) : null}
+          <TouchableOpacity
+            style={styles.favBtn}
+            activeOpacity={0.8}
+            onPress={() => toggleHeart(item.id)}
+          >
+            <MaterialCommunityIcons
+              name={isFav ? 'heart' : 'heart-outline'}
+              size={16}
+              color={isFav ? COLOR_ORANGE : '#fff'}
+            />
+          </TouchableOpacity>
+        </View>
+        <View style={styles.carouselBody}>
+          <Text style={styles.cardName} numberOfLines={1}>{item.name}</Text>
+          {!!item.secondary && (
+            <Text style={styles.cardSecondary} numberOfLines={1}>{item.secondary}</Text>
+          )}
+          <View style={styles.cardFooterRow}>
+            {item.price ? <Text style={styles.cardPrice}>{item.price}</Text> : <View />}
+            <TouchableOpacity style={styles.cardActionBtn} onPress={() => openDetail(item)}>
+              <Text style={styles.cardActionBtnText}>{actionLabelFor(item.categoryKey)}</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </TouchableOpacity>
+    );
+  }
+
+  function renderGridCard(item, index) {
+    const badge = badgeColorFor(item.badge);
+    const isLeftColumn = index % 2 === 0;
+    const isFav = !!heartOn[item.id];
+    return (
+      <View key={item.id} style={[styles.gridCard, isLeftColumn && { marginRight: CARD_GAP }]}>
+        <View style={styles.gridImageWrap}>
+          {item.imageURL ? (
+            <Image source={{ uri: item.imageURL }} style={styles.gridImage} resizeMode="cover" />
+          ) : (
+            <View style={[styles.gridImage, styles.imagePlaceholder]}>
+              <MaterialCommunityIcons name="image-outline" size={22} color="#c7d0d6" />
+            </View>
+          )}
+          {item.badge ? (
+            <View style={[styles.statusBadge, { backgroundColor: badge.bg, borderColor: badge.border }]}>
+              <Text style={[styles.statusBadgeText, { color: badge.text }]}>{item.badge}</Text>
+            </View>
+          ) : null}
+          <TouchableOpacity
+            style={styles.favBtn}
+            activeOpacity={0.8}
+            onPress={() => toggleHeart(item.id)}
+          >
+            <MaterialCommunityIcons
+              name={isFav ? 'heart' : 'heart-outline'}
+              size={16}
+              color={isFav ? COLOR_ORANGE : '#fff'}
+            />
+          </TouchableOpacity>
+        </View>
+        <View style={styles.gridBody}>
+          <Text style={styles.cardName} numberOfLines={1}>{item.name}</Text>
+          <View style={styles.gridInfoRow}>
+            <Text style={styles.cardSecondary} numberOfLines={1}>{item.secondary || ' '}</Text>
+            {item.price && <Text style={styles.cardPrice}>{item.price}</Text>}
+          </View>
+          <TouchableOpacity style={styles.gridActionBtn} activeOpacity={0.85} onPress={() => openDetail(item)}>
+            <Text style={styles.cardActionBtnText}>{actionLabelFor(item.categoryKey)}</Text>
+          </TouchableOpacity>
+        </View>
+      </View>
+    );
+  }
+
+  function renderSection(filterMeta) {
+    const items = filteredSections[filterMeta.key];
+    if (!items || items.length === 0) return null;
+    return (
+      <View key={filterMeta.key} style={styles.sectionBlock}>
+        <Text style={styles.sectionTitle}>{filterMeta.label}</Text>
+        <ScrollView
+          horizontal
+          showsHorizontalScrollIndicator={false}
+          contentContainerStyle={styles.carouselRow}
+        >
+          {items.map(renderCarouselCard)}
+        </ScrollView>
+      </View>
+    );
+  }
 
   return (
     <SafeAreaView style={styles.safeArea}>
@@ -198,285 +486,208 @@ export default function AgendaScreen() {
         <ScrollView
           style={{ flex: 1 }}
           contentContainerStyle={{ paddingBottom: 32 }}
+          keyboardShouldPersistTaps="handled"
           showsVerticalScrollIndicator={false}
         >
-          {/* Header: nombre de usuario + mes actual*/}
-          <View style={styles.headerRow}>
-            <View style={{ flex: 1 }}>
-              <Text style={styles.title}>Agenda de {userName}</Text>
-              <Text style={styles.subtitle}>{MESES[mesActual]} {anioActual}</Text>
-            </View>
-            <TouchableOpacity onPress={() => setShowMenu(true)} style={styles.menuBtn} hitSlop={8}>
-              <MaterialCommunityIcons name="menu" size={24} color={COLOR_TEXT_DARK} />
-            </TouchableOpacity>
-          </View>
+          {/* Header: nombre de usuario + subtítulo */}
+          <Text style={styles.title}>{userName}</Text>
+          <Text style={styles.subtitle}>Mira tus reservas</Text>
 
-          {/* Filtro activo*/}
-          <View style={styles.chipsScrollViewSingle}>
-            <View style={[styles.chip, styles.chipActive, styles.filtroChip]}>
-              <MaterialCommunityIcons name="map-marker-outline" size={16} color="#fff" style={{ marginRight: 6 }} />
-              <Text style={[styles.chipText, styles.chipTextActive]}>{departamentoFiltro}</Text>
+          {/* Barra de búsqueda con dropdown de sugerencias */}
+          <View style={styles.searchWrapper}>
+            <View style={styles.searchBar}>
+              <MaterialCommunityIcons name="magnify" size={20} color="#9AA3A8" style={{ marginRight: 8 }} />
+              <TextInput
+                style={styles.searchInput}
+                placeholder="Buscar en tus favoritos y reservas..."
+                placeholderTextColor="#999"
+                value={search}
+                onChangeText={(text) => {
+                  setSearch(text);
+                  setShowSuggestions(text.trim().length > 0);
+                }}
+                onFocus={() => setShowSuggestions(search.trim().length > 0)}
+              />
+              <TouchableOpacity hitSlop={8} style={styles.micBtn}>
+                <MaterialCommunityIcons name="microphone-outline" size={20} color="#888" />
+              </TouchableOpacity>
             </View>
-          </View>
 
-          {/* Eventos próximos */}
-          {eventosProximos.length > 0 && (
-            <View style={styles.sectionBlock}>
-              <Text style={styles.sectionTitle}>Eventos próximos</Text>
-              <ScrollView
-                horizontal
-                showsHorizontalScrollIndicator={false}
-                contentContainerStyle={styles.carouselRow}
-              >
-                {eventosProximos.map((item) => (
+            {showSuggestions && suggestions.length > 0 && (
+              <View style={styles.suggestionsPanel}>
+                {suggestions.map((item) => (
                   <TouchableOpacity
                     key={item.id}
-                    style={styles.carouselCard}
-                    activeOpacity={0.9}
-                    onPress={() => {
-                      setMesActual(item.fechaJS.getMonth());
-                      setAnioActual(item.fechaJS.getFullYear());
-                      setDiaSeleccionado(item.fechaJS);
-                      setEventoSeleccionado(item);
-                    }}
+                    style={styles.suggestionRow}
+                    activeOpacity={0.7}
+                    onPress={() => handlePressSuggestion(item)}
                   >
-                    <View style={styles.carouselImageWrap}>
-                      {item.imagen ? (
-                        <Image source={{ uri: item.imagen }} style={styles.carouselImage} resizeMode="cover" />
-                      ) : (
-                        <View style={[styles.carouselImage, styles.imagePlaceholder]}>
-                          <MaterialCommunityIcons name="image-outline" size={24} color="#c7d0d6" />
-                        </View>
-                      )}
-                      <View style={[styles.statusBadge, { backgroundColor: (CATEGORIAS[item.categoria] || COLOR_TEAL) + '22', borderColor: CATEGORIAS[item.categoria] || COLOR_TEAL }]}>
-                        <Text style={[styles.statusBadgeText, { color: CATEGORIAS[item.categoria] || COLOR_TEAL }]}>{item.categoria}</Text>
-                      </View>
-                    </View>
-                    <View style={styles.carouselBody}>
-                      <Text style={styles.cardName} numberOfLines={1}>{item.nombre}</Text>
-                      <Text style={styles.cardSecondary} numberOfLines={1}>
-                        {item.fechaJS.getDate()} de {MESES[item.fechaJS.getMonth()]}
-                      </Text>
-                    </View>
+                    <MaterialCommunityIcons name="map-marker-outline" size={16} color="#888" style={{ marginRight: 8 }} />
+                    <Text style={styles.suggestionText} numberOfLines={1}>{item.name}</Text>
                   </TouchableOpacity>
                 ))}
-              </ScrollView>
+              </View>
+            )}
+          </View>
+
+          {/* Chips de categoría */}
+          <ScrollView
+            horizontal
+            showsHorizontalScrollIndicator={false}
+            style={styles.chipsScrollView}
+            contentContainerStyle={styles.chipsRow}
+          >
+            {CATEGORY_CHIPS.map((chip) => {
+              const active = activeCategory === chip.slug;
+              return (
+                <TouchableOpacity
+                  key={chip.slug}
+                  style={[styles.chip, active && styles.chipActive]}
+                  activeOpacity={0.85}
+                  onPress={() => setActiveCategory(chip.slug)}
+                >
+                  <MaterialCommunityIcons
+                    name={chip.icon}
+                    size={16}
+                    color={active ? '#fff' : COLOR_TEAL}
+                    style={{ marginRight: 6 }}
+                  />
+                  <Text style={[styles.chipText, active && styles.chipTextActive]}>{chip.label}</Text>
+                </TouchableOpacity>
+              );
+            })}
+          </ScrollView>
+
+          {/* Tarjeta promocional / CTA */}
+          <View style={styles.ctaCard}>
+            <View style={styles.ctaLeft}>
+              <Text style={styles.ctaTitle} numberOfLines={2}>
+                {promo?.Titulo || promo?.Nombre || 'Aprovecha nuestras promociones'}
+              </Text>
+              <Text style={styles.ctaDesc} numberOfLines={3}>
+                {promo?.Descripcion || 'Encuentra ofertas especiales para tu próxima experiencia.'}
+              </Text>
+              <TouchableOpacity activeOpacity={0.85} style={styles.ctaBtn} onPress={goExplore}>
+                <Text style={styles.ctaBtnText}>{promo?.CTA || 'Ver promociones'}</Text>
+              </TouchableOpacity>
             </View>
+            <View style={styles.ctaRight}>
+              {promo?.ImagenURL ? (
+                <Image source={{ uri: promo.ImagenURL }} style={styles.ctaImage} resizeMode="cover" />
+              ) : (
+                <View style={[styles.ctaImage, styles.ctaImagePlaceholder]}>
+                  <MaterialCommunityIcons name="image-outline" size={26} color="#c7d0d6" />
+                </View>
+              )}
+            </View>
+          </View>
+
+          {/* Chips de estado */}
+          <ScrollView
+            horizontal
+            showsHorizontalScrollIndicator={false}
+            style={styles.chipsScrollView}
+            contentContainerStyle={styles.chipsRow}
+          >
+            {STATUS_FILTERS.map((f) => {
+              const active = activeStatusFilter === f.key;
+              return (
+                <TouchableOpacity
+                  key={f.key}
+                  style={[styles.chip, active && styles.chipActive]}
+                  activeOpacity={0.85}
+                  onPress={() => setActiveStatusFilter(f.key)}
+                >
+                  <MaterialCommunityIcons
+                    name={f.icon}
+                    size={16}
+                    color={active ? '#fff' : COLOR_TEAL}
+                    style={{ marginRight: 6 }}
+                  />
+                  <Text style={[styles.chipText, active && styles.chipTextActive]}>{f.label}</Text>
+                </TouchableOpacity>
+              );
+            })}
+          </ScrollView>
+
+          {/* Contenido principal */}
+          {!userId ? (
+            renderEmptyState()
+          ) : loading ? (
+            <View style={styles.loadingRow}>
+              <ActivityIndicator size="small" color={COLOR_TEAL} />
+              <Text style={styles.loadingText}>Cargando...</Text>
+            </View>
+          ) : activeStatusFilter === 'todos' ? (
+            allEmpty ? renderEmptyState() : STATUS_CATEGORY_FILTERS.map((f) => renderSection(f))
+          ) : activeItems.length > 0 ? (
+            <View style={styles.resultsGrid}>
+              {activeItems.map((item, idx) => renderGridCard(item, idx))}
+            </View>
+          ) : (
+            renderEmptyState()
           )}
-
-          {/* Separador entre meses / navegación */}
-          <View style={styles.navMesRow}>
-            <TouchableOpacity onPress={() => cambiarMes(-1)} style={styles.navMesBtn}>
-              <MaterialCommunityIcons name="chevron-left" size={22} color={COLOR_TEAL} />
-            </TouchableOpacity>
-            <Text style={styles.navMesTexto}>{MESES[mesActual]} {anioActual}</Text>
-            <TouchableOpacity onPress={() => cambiarMes(1)} style={styles.navMesBtn}>
-              <MaterialCommunityIcons name="chevron-right" size={22} color={COLOR_TEAL} />
-            </TouchableOpacity>
-          </View>
-
-          {/* Calendario mensual */}
-          <View style={styles.calendarioCard}>
-            <View style={styles.filaDias}>
-              {DIAS_SEMANA.map((d, idx) => (
-                <Text key={idx} style={styles.diaSemanaTexto}>{d}</Text>
-              ))}
-            </View>
-            <View style={styles.gridDias}>
-              {diasDelMes.map((fecha, idx) => {
-                if (!fecha) {
-                  return <View key={idx} style={styles.celdaDia} />;
-                }
-                const key = fechaKey(fecha);
-                const categoriasDelDia = eventosPorDia[key] ? Array.from(eventosPorDia[key]) : [];
-                const esSeleccionado = fechaKey(diaSeleccionado) === key;
-                const esHoy = fechaKey(hoy) === key;
-
-                return (
-                  <TouchableOpacity
-                    key={idx}
-                    style={[
-                      styles.celdaDia,
-                      esSeleccionado && styles.celdaDiaSeleccionada,
-                    ]}
-                    onPress={() => setDiaSeleccionado(fecha)}
-                  >
-                    <Text style={[
-                      styles.numeroDia,
-                      esSeleccionado && styles.numeroDiaSeleccionado,
-                      esHoy && !esSeleccionado && styles.numeroDiaHoy,
-                    ]}>
-                      {fecha.getDate()}
-                    </Text>
-                    <View style={styles.puntosRow}>
-                      {categoriasDelDia.slice(0, 3).map((cat, i) => (
-                        <View key={i} style={[styles.puntoEvento, { backgroundColor: CATEGORIAS[cat] || COLOR_TEAL }]} />
-                      ))}
-                    </View>
-                  </TouchableOpacity>
-                );
-              })}
-            </View>
-
-            {/* Leyenda de categorías */}
-            <View style={styles.leyendaRow}>
-              {Object.entries(CATEGORIAS).map(([nombre, color]) => (
-                <View key={nombre} style={styles.leyendaItem}>
-                  <View style={[styles.leyendaPunto, { backgroundColor: color }]} />
-                  <Text style={styles.leyendaTexto}>{nombre}</Text>
-                </View>
-              ))}
-            </View>
-          </View>
-
-          {/* Tarjeta del evento seleccionado */}
-          <View style={{ marginHorizontal: HORIZONTAL_PADDING, marginTop: 16 }}>
-            <Text style={[styles.sectionTitle, { marginLeft: 0 }]}>
-              {eventosDelDiaSeleccionado.length > 0 ? 'Evento del día' : 'Sin eventos este día'}
-            </Text>
-
-            {eventoSeleccionado ? (
-              <View style={styles.eventoCard}>
-                {eventoSeleccionado.imagen ? (
-                  <Image source={{ uri: eventoSeleccionado.imagen }} style={styles.eventoImagen} />
-                ) : null}
-
-                <View style={{ padding: 16 }}>
-                  <View style={[styles.statusBadge, styles.badgeInline, { backgroundColor: (CATEGORIAS[eventoSeleccionado.categoria] || COLOR_TEAL) + '22', borderColor: CATEGORIAS[eventoSeleccionado.categoria] || COLOR_TEAL }]}>
-                    <Text style={[styles.statusBadgeText, { color: CATEGORIAS[eventoSeleccionado.categoria] || COLOR_TEAL }]}>
-                      {eventoSeleccionado.categoria}
-                    </Text>
-                  </View>
-
-                  <Text style={styles.eventoNombre}>{eventoSeleccionado.nombre}</Text>
-
-                  <View style={styles.eventoInfoRow}>
-                    <MaterialCommunityIcons name="calendar" size={18} color={COLOR_TEAL} />
-                    <Text style={styles.eventoInfoTexto}>
-                      {eventoSeleccionado.fechaJS.getDate()} de {MESES[eventoSeleccionado.fechaJS.getMonth()]}
-                    </Text>
-                  </View>
-
-                  {(eventoSeleccionado.horaInicio || eventoSeleccionado.horaFin) && (
-                    <View style={styles.eventoInfoRow}>
-                      <MaterialCommunityIcons name="clock-outline" size={18} color={COLOR_TEAL} />
-                      <Text style={styles.eventoInfoTexto}>
-                        {eventoSeleccionado.horaInicio}{eventoSeleccionado.horaFin ? ` – ${eventoSeleccionado.horaFin}` : ''}
-                      </Text>
-                    </View>
-                  )}
-
-                  {eventoSeleccionado.ubicacion && (
-                    <View style={styles.eventoInfoRow}>
-                      <MaterialCommunityIcons name="map-marker" size={18} color={COLOR_TEAL} />
-                      <Text style={styles.eventoInfoTexto}>{eventoSeleccionado.ubicacion}</Text>
-                    </View>
-                  )}
-
-                  {/* Mini mapa 3D */}
-                  {eventoSeleccionado.lat && eventoSeleccionado.lng && (
-                    <View style={styles.miniMapaContenedor}>
-                      <MapView
-                        provider={PROVIDER_GOOGLE}
-                        style={{ flex: 1 }}
-                        scrollEnabled={false}
-                        zoomEnabled={false}
-                        pitchEnabled={false}
-                        rotateEnabled={false}
-                        showsBuildings
-                        initialCamera={{
-                          center: { latitude: eventoSeleccionado.lat, longitude: eventoSeleccionado.lng },
-                          pitch: 60,
-                          heading: 20,
-                          altitude: 800,
-                          zoom: 17,
-                        }}
-                      >
-                        <Marker
-                          coordinate={{ latitude: eventoSeleccionado.lat, longitude: eventoSeleccionado.lng }}
-                          title={eventoSeleccionado.nombre}
-                        />
-                      </MapView>
-                    </View>
-                  )}
-
-                  <TouchableOpacity
-                    style={styles.verDetallesBtn}
-                    activeOpacity={0.85}
-                    onPress={() => router.push(`/evento/${eventoSeleccionado.id}`)}
-                  >
-                    <Text style={styles.verDetallesTexto}>Ver detalles</Text>
-                  </TouchableOpacity>
-                </View>
-              </View>
-            ) : (
-              <View style={styles.emptyState}>
-                <View style={styles.emptyIconCircle}>
-                  <MaterialCommunityIcons name="calendar-blank-outline" size={30} color={COLOR_TEAL} />
-                </View>
-                <Text style={styles.emptyTitle}>No hay eventos este día</Text>
-                <Text style={styles.emptySubtitle}>Elige otra fecha en el calendario para ver qué hay disponible</Text>
-              </View>
-            )}
-
-            {eventosDelDiaSeleccionado.length > 1 && (
-              <View style={{ marginTop: 12 }}>
-                {eventosDelDiaSeleccionado.filter((e) => e.id !== eventoSeleccionado?.id).map((e) => (
-                  <TouchableOpacity key={e.id} style={styles.otroEventoRow} onPress={() => setEventoSeleccionado(e)}>
-                    <View style={[styles.puntoEvento, { backgroundColor: CATEGORIAS[e.categoria] || COLOR_TEAL, marginRight: 8 }]} />
-                    <Text style={styles.otroEventoTexto} numberOfLines={1}>{e.nombre}</Text>
-                    <Text style={styles.otroEventoHora}>{e.horaInicio}</Text>
-                  </TouchableOpacity>
-                ))}
-              </View>
-            )}
-          </View>
         </ScrollView>
       </View>
 
-      {/* Menú de opciones */}
-      <Modal visible={showMenu} transparent animationType="fade" onRequestClose={() => setShowMenu(false)}>
-        <TouchableOpacity style={styles.modalBackdropBottom} activeOpacity={1} onPress={() => setShowMenu(false)}>
-          <View style={styles.menuCard}>
-            <TouchableOpacity style={styles.menuItem} onPress={() => { setShowMenu(false); setShowDeptModal(true); }}>
-              <MaterialCommunityIcons name="filter-variant" size={20} color={COLOR_TEAL} />
-              <Text style={styles.menuItemTexto}>Filtrar por departamento</Text>
-            </TouchableOpacity>
-            <TouchableOpacity style={styles.menuItem} onPress={() => { setShowMenu(false); router.push('/mis-reservas'); }}>
-              <MaterialCommunityIcons name="ticket-confirmation-outline" size={20} color={COLOR_TEAL} />
-              <Text style={styles.menuItemTexto}>Mis reservas</Text>
-            </TouchableOpacity>
-            <TouchableOpacity style={styles.menuItem} onPress={() => { setShowMenu(false); router.push('/eventos-favoritos'); }}>
-              <MaterialCommunityIcons name="heart-outline" size={20} color={COLOR_TEAL} />
-              <Text style={styles.menuItemTexto}>Eventos favoritos</Text>
-            </TouchableOpacity>
-          </View>
-        </TouchableOpacity>
-      </Modal>
+      {/* Modal de detalle */}
+      <Modal visible={showModal} animationType="slide" transparent onRequestClose={() => setShowModal(false)}>
+        <View style={styles.modalBackdrop}>
+          <View style={styles.modalCard}>
+            {selectedItem ? (
+              <ScrollView showsVerticalScrollIndicator={false}>
+                <View style={styles.modalHeaderRow}>
+                  <Text style={styles.modalTitle} numberOfLines={2}>{selectedItem.name}</Text>
+                  <TouchableOpacity
+                    onPress={() => setShowModal(false)}
+                    hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                    style={styles.modalCloseBtn}
+                  >
+                    <MaterialCommunityIcons name="close" size={20} color="#888" />
+                  </TouchableOpacity>
+                </View>
 
-      {/* Modal de filtro por departamento */}
-      <Modal visible={showDeptModal} transparent animationType="slide" onRequestClose={() => setShowDeptModal(false)}>
-        <TouchableOpacity style={styles.modalBackdropBottom} activeOpacity={1} onPress={() => setShowDeptModal(false)}>
-          <View style={styles.deptCard}>
-            <Text style={styles.deptTitulo}>Filtrar por departamento</Text>
-            <ScrollView style={{ maxHeight: 380 }}>
-              {DEPARTAMENTOS_NI.map((dep) => (
-                <TouchableOpacity
-                  key={dep}
-                  style={styles.deptItem}
-                  onPress={() => { setDepartamentoFiltro(dep); setShowDeptModal(false); }}
-                >
-                  <MaterialCommunityIcons
-                    name={departamentoFiltro === dep ? 'radiobox-marked' : 'radiobox-blank'}
-                    size={18}
-                    color={COLOR_TEAL}
-                  />
-                  <Text style={styles.deptItemTexto}>{dep}</Text>
-                </TouchableOpacity>
-              ))}
-            </ScrollView>
+                {selectedItem.badge ? (
+                  <View
+                    style={[
+                      styles.modalBadge,
+                      {
+                        backgroundColor: badgeColorFor(selectedItem.badge).bg,
+                        borderColor: badgeColorFor(selectedItem.badge).border,
+                      },
+                    ]}
+                  >
+                    <Text style={[styles.modalBadgeText, { color: badgeColorFor(selectedItem.badge).text }]}>
+                      {selectedItem.badge}
+                    </Text>
+                  </View>
+                ) : null}
+
+                {!!selectedItem.secondary && <Text style={styles.modalSub}>{selectedItem.secondary}</Text>}
+                {selectedItem.price ? <Text style={styles.modalPrice}>{selectedItem.price}</Text> : null}
+
+                <View style={styles.modalActionsRow}>
+                  <TouchableOpacity onPress={() => setShowModal(false)} style={styles.modalBtnNeutral}>
+                    <Text style={styles.modalBtnNeutralText}>Cerrar</Text>
+                  </TouchableOpacity>
+                  {selectedItem.categoryKey === 'enProceso' && (
+                    <TouchableOpacity
+                      onPress={() => verifyPayment(selectedItem)}
+                      style={styles.modalBtnPrimary}
+                      disabled={verifying}
+                    >
+                      {verifying ? (
+                        <ActivityIndicator color="#fff" />
+                      ) : (
+                        <Text style={styles.modalBtnPrimaryText}>Verificar pago</Text>
+                      )}
+                    </TouchableOpacity>
+                  )}
+                </View>
+              </ScrollView>
+            ) : null}
           </View>
-        </TouchableOpacity>
+        </View>
       </Modal>
     </SafeAreaView>
   );
@@ -490,57 +701,124 @@ const styles = StyleSheet.create({
   },
   container: { flex: 1, backgroundColor: '#f6fafd' },
 
-  headerRow: {
-    flexDirection: 'row',
-    alignItems: 'flex-start',
-    justifyContent: 'space-between',
-    marginTop: 12,
-    marginHorizontal: HORIZONTAL_PADDING,
-    marginBottom: 14,
-  },
   title: {
-    fontSize: 20,
+    fontSize: 22,
     fontWeight: 'bold',
     color: COLOR_TEXT_DARK,
+    marginTop: 12,
+    marginLeft: HORIZONTAL_PADDING,
     fontFamily: 'Montserrat-Bold',
   },
   subtitle: {
     fontSize: 14,
     color: COLOR_TEXT_MUTED,
-    marginTop: 2,
+    marginLeft: HORIZONTAL_PADDING,
+    marginBottom: 14,
     fontFamily: 'Montserrat-Regular',
   },
-  menuBtn: { padding: 4, marginTop: 2 },
 
-  // Chips
-  chipsScrollViewSingle: { paddingHorizontal: HORIZONTAL_PADDING, marginBottom: 16 },
+  // Búsqueda + sugerencias
+  searchWrapper: {
+    marginHorizontal: HORIZONTAL_PADDING,
+    marginBottom: 14,
+    zIndex: 20,
+  },
+  searchBar: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#fff',
+    borderRadius: 12,
+    paddingHorizontal: 14,
+    borderWidth: 1,
+    borderColor: '#E7ECEF',
+    elevation: 1,
+    shadowColor: '#000',
+    shadowOpacity: 0.04,
+    shadowRadius: 4,
+    shadowOffset: { width: 0, height: 1 },
+  },
+  searchInput: { flex: 1, paddingVertical: 12, fontSize: 14, color: COLOR_TEXT_DARK },
+  micBtn: { padding: 6, marginLeft: 4 },
+  suggestionsPanel: {
+    backgroundColor: '#fff',
+    borderRadius: 10,
+    marginTop: 6,
+    borderWidth: 1,
+    borderColor: COLOR_TEAL_SOFT,
+    overflow: 'hidden',
+    elevation: 3,
+    shadowColor: COLOR_TEAL,
+    shadowOpacity: 0.08,
+    shadowRadius: 8,
+    shadowOffset: { width: 0, height: 3 },
+  },
+  suggestionRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: 10,
+    paddingHorizontal: 12,
+    borderBottomWidth: 1,
+    borderBottomColor: '#f0f2f4',
+  },
+  suggestionText: { fontSize: 13.5, color: '#333', flex: 1 },
+
+  // Chips (categoría y estado comparten estilo)
+  chipsScrollView: { flexGrow: 0, flexShrink: 0, height: 44, marginBottom: 16 },
+  chipsRow: { paddingHorizontal: HORIZONTAL_PADDING, gap: 8, alignItems: 'center' },
   chip: {
     flexDirection: 'row',
     alignItems: 'center',
-    height: 36,
+    height: 40,
     borderRadius: 10,
     paddingHorizontal: 14,
     borderWidth: 1,
     borderColor: COLOR_TEAL,
     backgroundColor: '#fff',
-    alignSelf: 'flex-start',
   },
   chipActive: { backgroundColor: COLOR_TEAL, borderColor: COLOR_TEAL },
   chipText: { fontSize: 13, color: COLOR_TEAL, fontWeight: '600', fontFamily: 'Montserrat-Medium' },
   chipTextActive: { color: '#fff' },
-  filtroChip: {},
 
-  sectionBlock: { marginBottom: 20 },
+  // CTA Card
+  ctaCard: {
+    flexDirection: 'row',
+    backgroundColor: '#fff',
+    borderRadius: 14,
+    marginHorizontal: HORIZONTAL_PADDING,
+    marginBottom: 16,
+    padding: 16,
+    alignItems: 'center',
+    borderWidth: 1,
+    borderColor: COLOR_TEAL_SOFT,
+    elevation: 2,
+    shadowColor: '#000',
+    shadowOpacity: 0.06,
+    shadowRadius: 8,
+    shadowOffset: { width: 0, height: 2 },
+  },
+  ctaLeft: { flex: 1.3, paddingRight: 12 },
+  ctaTitle: { fontSize: 16, color: COLOR_ORANGE, fontFamily: 'Montserrat-Bold', marginBottom: 6 },
+  ctaDesc: { fontSize: 12, color: '#666', fontFamily: 'Montserrat-Regular', marginBottom: 12, lineHeight: 16 },
+  ctaBtn: { backgroundColor: COLOR_TEAL, borderRadius: 10, paddingHorizontal: 16, paddingVertical: 8, alignSelf: 'flex-start' },
+  ctaBtnText: { color: '#fff', fontWeight: '700', fontSize: 12, fontFamily: 'Montserrat-Bold' },
+  ctaRight: { width: 90, height: 90, borderRadius: 14, overflow: 'hidden' },
+  ctaImage: { width: '100%', height: '100%' },
+  ctaImagePlaceholder: { backgroundColor: '#eef2f3', alignItems: 'center', justifyContent: 'center' },
+
+  loadingRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', paddingVertical: 40 },
+  loadingText: { marginLeft: 8, color: COLOR_TEAL, fontSize: 13 },
+
+  // Secciones (carruseles snap/peek)
+  sectionBlock: { marginBottom: 24 },
   sectionTitle: {
-    fontSize: 16,
+    fontSize: 18,
     fontWeight: 'bold',
     color: COLOR_TEXT_DARK,
     marginLeft: HORIZONTAL_PADDING,
     marginBottom: 12,
     fontFamily: 'Montserrat-Bold',
   },
-
-  carouselRow: { paddingHorizontal: HORIZONTAL_PADDING, gap: 12 },
+  carouselRow: { paddingHorizontal: HORIZONTAL_PADDING, gap: CARD_GAP },
   carouselCard: {
     width: CAROUSEL_CARD_WIDTH,
     backgroundColor: '#fff',
@@ -554,73 +832,22 @@ const styles = StyleSheet.create({
     shadowRadius: 8,
     shadowOffset: { width: 0, height: 3 },
   },
-  carouselImageWrap: { width: '100%', height: 110, backgroundColor: '#eceff1' },
+  carouselImageWrap: { width: '100%', height: 130, backgroundColor: '#eceff1' },
   carouselImage: { width: '100%', height: '100%' },
   carouselBody: { padding: 12 },
 
-  navMesRow: {
+  // Grid de resultados
+  resultsGrid: {
     flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginBottom: 14,
-    gap: 20,
+    flexWrap: 'wrap',
+    justifyContent: 'flex-start',
+    paddingHorizontal: HORIZONTAL_PADDING,
   },
-  navMesBtn: {
-    backgroundColor: COLOR_TEAL_SOFT,
-    borderRadius: 20,
-    padding: 6,
-  },
-  navMesTexto: {
-    fontFamily: 'Montserrat-Bold',
-    color: COLOR_TEXT_DARK,
-    fontSize: 15,
-    minWidth: 150,
-    textAlign: 'center',
-  },
-
-  calendarioCard: {
+  gridCard: {
+    width: GRID_CARD_WIDTH,
     backgroundColor: '#fff',
     borderRadius: 16,
-    marginHorizontal: HORIZONTAL_PADDING,
-    padding: 14,
-    borderWidth: 1,
-    borderColor: COLOR_TEAL_SOFT,
-    elevation: 2,
-    shadowColor: '#000',
-    shadowOpacity: 0.08,
-    shadowRadius: 8,
-    shadowOffset: { width: 0, height: 3 },
-  },
-  filaDias: { flexDirection: 'row', justifyContent: 'space-between', marginBottom: 6 },
-  diaSemanaTexto: { width: `${100 / 7}%`, textAlign: 'center', color: COLOR_TEXT_MUTED, fontSize: 12, fontFamily: 'Montserrat-Medium' },
-
-  gridDias: { flexDirection: 'row', flexWrap: 'wrap' },
-  celdaDia: {
-    width: `${100 / 7}%`,
-    aspectRatio: 1,
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginBottom: 4,
-  },
-  celdaDiaSeleccionada: {
-    backgroundColor: COLOR_TEAL,
-    borderRadius: 10,
-  },
-  numeroDia: { color: COLOR_TEXT_DARK, fontSize: 14, fontFamily: 'Montserrat-Regular' },
-  numeroDiaSeleccionado: { color: '#fff', fontFamily: 'Montserrat-Bold' },
-  numeroDiaHoy: { color: COLOR_ORANGE, fontFamily: 'Montserrat-Bold' },
-
-  puntosRow: { flexDirection: 'row', gap: 2, marginTop: 2, height: 6 },
-  puntoEvento: { width: 5, height: 5, borderRadius: 3 },
-
-  leyendaRow: { flexDirection: 'row', flexWrap: 'wrap', marginTop: 12, gap: 10 },
-  leyendaItem: { flexDirection: 'row', alignItems: 'center', gap: 4 },
-  leyendaPunto: { width: 8, height: 8, borderRadius: 4 },
-  leyendaTexto: { color: COLOR_TEXT_MUTED, fontSize: 11, fontFamily: 'Montserrat-Regular' },
-
-  eventoCard: {
-    backgroundColor: '#fff',
-    borderRadius: 16,
+    marginBottom: CARD_GAP,
     overflow: 'hidden',
     borderWidth: 1,
     borderColor: COLOR_TEAL_SOFT,
@@ -630,29 +857,13 @@ const styles = StyleSheet.create({
     shadowRadius: 8,
     shadowOffset: { width: 0, height: 3 },
   },
-  eventoImagen: { width: '100%', height: 150 },
-  eventoNombre: { fontFamily: 'Montserrat-Bold', color: COLOR_TEXT_DARK, fontSize: 17, marginBottom: 10, marginTop: 8 },
-  eventoInfoRow: { flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 8 },
-  eventoInfoTexto: { color: '#444', fontSize: 14, fontFamily: 'Montserrat-Regular' },
+  gridImageWrap: { width: '100%', height: 100, backgroundColor: '#eceff1' },
+  gridImage: { width: '100%', height: '100%' },
+  gridBody: { padding: 10 },
+  gridInfoRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 },
+  gridActionBtn: { backgroundColor: COLOR_TEAL, borderRadius: 10, paddingVertical: 7, alignItems: 'center' },
 
-  miniMapaContenedor: {
-    height: 140,
-    borderRadius: 12,
-    overflow: 'hidden',
-    marginTop: 4,
-    marginBottom: 14,
-  },
-
-  verDetallesBtn: {
-    backgroundColor: COLOR_TEAL,
-    borderRadius: 10,
-    paddingVertical: 12,
-    alignItems: 'center',
-    marginTop: 4,
-  },
-  verDetallesTexto: { color: '#fff', fontFamily: 'Montserrat-Bold', fontSize: 15 },
-
-  // Badges de categoría
+  imagePlaceholder: { alignItems: 'center', justifyContent: 'center' },
   statusBadge: {
     position: 'absolute',
     top: 8,
@@ -662,61 +873,62 @@ const styles = StyleSheet.create({
     paddingHorizontal: 8,
     paddingVertical: 2,
   },
-  statusBadgeText: { fontSize: 10.5, fontWeight: '700', fontFamily: 'Montserrat-Bold' },
-  badgeInline: { position: 'relative', top: 0, left: 0, alignSelf: 'flex-start', marginBottom: 4 },
+  statusBadgeText: { fontSize: 10.5, fontWeight: '700' },
+  favBtn: {
+    position: 'absolute',
+    top: 8,
+    right: 8,
+    width: 26,
+    height: 26,
+    borderRadius: 13,
+    backgroundColor: 'rgba(0,0,0,0.35)',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
 
   cardName: { fontSize: 13.5, fontWeight: 'bold', color: COLOR_TEXT_DARK, fontFamily: 'Montserrat-Bold', marginBottom: 3 },
-  cardSecondary: { fontSize: 11.5, color: COLOR_TEXT_MUTED, fontFamily: 'Montserrat-Regular' },
+  cardSecondary: { fontSize: 11.5, color: COLOR_TEXT_MUTED, marginBottom: 6 },
+  cardFooterRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+  cardPrice: { fontSize: 12.5, fontWeight: '700', color: COLOR_ORANGE },
+  cardActionBtn: { backgroundColor: COLOR_TEAL, borderRadius: 10, paddingHorizontal: 12, paddingVertical: 6 },
+  cardActionBtnText: { color: '#fff', fontSize: 11.5, fontWeight: '700' },
 
-  otroEventoRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: '#fff',
-    borderRadius: 10,
-    borderWidth: 1,
-    borderColor: COLOR_TEAL_SOFT,
-    padding: 10,
-    marginBottom: 6,
-  },
-  otroEventoTexto: { flex: 1, color: '#444', fontSize: 13, fontFamily: 'Montserrat-Regular' },
-  otroEventoHora: { color: COLOR_TEXT_MUTED, fontSize: 12, fontFamily: 'Montserrat-Regular' },
-
-  imagePlaceholder: { alignItems: 'center', justifyContent: 'center' },
-
-  // Empty state 
-  emptyState: { alignItems: 'center', paddingHorizontal: HORIZONTAL_PADDING, paddingTop: 24, paddingBottom: 12 },
+  // Empty state
+  emptyState: { alignItems: 'center', paddingHorizontal: HORIZONTAL_PADDING, paddingTop: 36, paddingBottom: 24 },
   emptyIconCircle: {
-    width: 60,
-    height: 60,
-    borderRadius: 30,
+    width: 68,
+    height: 68,
+    borderRadius: 34,
     backgroundColor: COLOR_TEAL_SOFT,
     alignItems: 'center',
     justifyContent: 'center',
     marginBottom: 6,
   },
-  emptyTitle: { fontSize: 14, fontWeight: '700', color: '#333', textAlign: 'center', marginTop: 10, marginBottom: 4, fontFamily: 'Montserrat-Bold' },
-  emptySubtitle: { fontSize: 12.5, color: COLOR_TEXT_MUTED, textAlign: 'center', lineHeight: 18, maxWidth: 280, fontFamily: 'Montserrat-Regular' },
-
-  // Modales
-  modalBackdropBottom: { flex: 1, backgroundColor: 'rgba(0,0,0,0.35)', justifyContent: 'flex-end' },
-  menuCard: {
-    backgroundColor: '#fff',
-    borderTopLeftRadius: 20,
-    borderTopRightRadius: 20,
-    padding: 18,
-    gap: 4,
+  emptyTitle: { fontSize: 15, fontWeight: '700', color: '#333', textAlign: 'center', marginTop: 12, marginBottom: 6 },
+  emptySubtitle: {
+    fontSize: 13,
+    color: COLOR_TEXT_MUTED,
+    textAlign: 'center',
+    lineHeight: 19,
+    marginBottom: 18,
+    maxWidth: 300,
   },
-  menuItem: { flexDirection: 'row', alignItems: 'center', gap: 12, paddingVertical: 14 },
-  menuItemTexto: { color: COLOR_TEXT_DARK, fontSize: 15, fontFamily: 'Montserrat-Medium' },
+  emptyBtn: { backgroundColor: COLOR_ORANGE, borderRadius: 16, paddingHorizontal: 20, paddingVertical: 12 },
+  emptyBtnText: { color: '#fff', fontWeight: '700', fontSize: 13 },
 
-  deptCard: {
-    backgroundColor: '#fff',
-    borderTopLeftRadius: 20,
-    borderTopRightRadius: 20,
-    padding: 18,
-    maxHeight: '70%',
-  },
-  deptTitulo: { fontFamily: 'Montserrat-Bold', color: COLOR_TEXT_DARK, fontSize: 16, marginBottom: 10 },
-  deptItem: { flexDirection: 'row', alignItems: 'center', gap: 10, paddingVertical: 10 },
-  deptItemTexto: { color: '#333', fontSize: 14, fontFamily: 'Montserrat-Regular' },
+  // Modal de detalle
+  modalBackdrop: { flex: 1, backgroundColor: 'rgba(0,0,0,0.45)', justifyContent: 'center', padding: 20 },
+  modalCard: { backgroundColor: '#fff', borderRadius: 18, padding: 20, maxHeight: '80%' },
+  modalHeaderRow: { flexDirection: 'row', alignItems: 'flex-start', justifyContent: 'space-between' },
+  modalTitle: { fontSize: 17, fontWeight: '700', color: COLOR_TEXT_DARK, flex: 1, paddingRight: 12 },
+  modalCloseBtn: { padding: 4, marginTop: -2 },
+  modalBadge: { alignSelf: 'flex-start', borderRadius: 8, borderWidth: 1, paddingHorizontal: 8, paddingVertical: 3, marginTop: 10 },
+  modalBadgeText: { fontSize: 12, fontWeight: '700' },
+  modalSub: { color: COLOR_TEXT_MUTED, marginTop: 10, lineHeight: 19 },
+  modalPrice: { color: COLOR_ORANGE, fontWeight: '700', fontSize: 15, marginTop: 10 },
+  modalActionsRow: { flexDirection: 'row', justifyContent: 'flex-end', gap: 8, marginTop: 20 },
+  modalBtnPrimary: { backgroundColor: COLOR_TEAL, paddingHorizontal: 16, paddingVertical: 11, borderRadius: 10 },
+  modalBtnPrimaryText: { color: '#fff', fontWeight: '700' },
+  modalBtnNeutral: { paddingHorizontal: 12, paddingVertical: 11 },
+  modalBtnNeutralText: { color: COLOR_TEAL, fontWeight: '700' },
 });

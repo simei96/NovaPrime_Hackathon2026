@@ -1,5 +1,6 @@
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
+import { onAuthStateChanged } from 'firebase/auth';
 import {
   collection,
   onSnapshot,
@@ -10,32 +11,32 @@ import {
 } from 'firebase/firestore';
 import React, { useEffect, useMemo, useState } from 'react';
 import {
-  FlatList,
+  Dimensions,
   Image,
   Modal,
+  Platform,
   SafeAreaView,
   ScrollView,
+  StatusBar,
   StyleSheet,
   Text,
   TouchableOpacity,
-  View,
+  View
 } from 'react-native';
 import MapView, { Marker, PROVIDER_GOOGLE } from 'react-native-maps';
-import { db } from '../../../firebaseConfig';
+import { auth, db } from '../../../firebaseConfig';
 
-// ──────────────────────────────────────────────────────────────
-// AJUSTA ESTO si tus campos de Firestore tienen otro nombre.
-// Colección asumida: "eventos"
-//   nombre        (string)
-//   categoria     (string) -> una de CATEGORIAS
-//   fecha         (Timestamp)
-//   horaInicio    (string, ej. "6:00 PM")
-//   horaFin       (string, ej. "10:00 PM")
-//   ubicacion     (string)
-//   departamento  (string)
-//   lat, lng      (number)
-//   imagen        (string url, opcional)
-// ──────────────────────────────────────────────────────────────
+const { width: SCREEN_WIDTH } = Dimensions.get('window');
+
+const COLOR_TEAL = '#2EAD9A';
+const COLOR_ORANGE = '#D96E32';
+const COLOR_TEAL_SOFT = '#D9F0EC';
+const COLOR_TEXT_DARK = '#222';
+const COLOR_TEXT_MUTED = '#7A8489';
+
+const HORIZONTAL_PADDING = 18;
+const CAROUSEL_CARD_WIDTH = Math.round(SCREEN_WIDTH * 0.6);
+const ANDROID_STATUSBAR_HEIGHT = StatusBar.currentHeight || 24;
 
 const MESES = [
   'Enero', 'Febrero', 'Marzo', 'Abril', 'Mayo', 'Junio',
@@ -53,17 +54,17 @@ const DEPARTAMENTOS_NI = [
   'Región Autónoma de la Costa Caribe Sur',
 ];
 
+// Colores de categoría
 const CATEGORIAS = {
-  Gastronomía: '#e65100',
-  Historia: '#6a1b9a',
+  Gastronomía: '#D96E32',
+  Historia: '#6a4c93',
   Artesanías: '#8d6e63',
   Música: '#c2185b',
-  Tradiciones: '#00838f',
-  Naturaleza: '#2e7d32',
+  Tradiciones: '#2EAD9A',
+  Naturaleza: '#8FB32E',
 };
 
 function fechaKey(date) {
-  // yyyy-mm-dd local, sin problemas de zona horaria
   const y = date.getFullYear();
   const m = String(date.getMonth() + 1).padStart(2, '0');
   const d = String(date.getDate()).padStart(2, '0');
@@ -71,12 +72,10 @@ function fechaKey(date) {
 }
 
 function generarDiasDelMes(year, month) {
-  // month: 0-indexado
   const primerDia = new Date(year, month, 1);
   const ultimoDia = new Date(year, month + 1, 0);
   const dias = [];
 
-  // relleno inicial para alinear con el día de la semana
   for (let i = 0; i < primerDia.getDay(); i++) {
     dias.push(null);
   }
@@ -88,6 +87,25 @@ function generarDiasDelMes(year, month) {
 
 export default function AgendaScreen() {
   const router = useRouter();
+
+  // Nombre de usuario para el header
+  const [userName, setUserName] = useState(
+    auth.currentUser
+      ? auth.currentUser.displayName ||
+          (auth.currentUser.email ? auth.currentUser.email.split('@')[0] : 'Usuario')
+      : 'Invitado',
+  );
+
+  useEffect(() => {
+    const unsubAuth = onAuthStateChanged(auth, (user) => {
+      setUserName(
+        user
+          ? user.displayName || (user.email ? user.email.split('@')[0] : 'Usuario')
+          : 'Invitado',
+      );
+    });
+    return () => unsubAuth();
+  }, []);
 
   const hoy = new Date();
   const [mesActual, setMesActual] = useState(hoy.getMonth());
@@ -101,7 +119,7 @@ export default function AgendaScreen() {
   const [showMenu, setShowMenu] = useState(false);
   const [showDeptModal, setShowDeptModal] = useState(false);
 
-  // ── Carga de eventos del mes desde Firestore ────────────────
+  // ── Carga de eventos del mes desde Firestore
   useEffect(() => {
     const inicioMes = new Date(anioActual, mesActual, 1, 0, 0, 0);
     const finMes = new Date(anioActual, mesActual + 1, 0, 23, 59, 59);
@@ -135,7 +153,6 @@ export default function AgendaScreen() {
     return eventos.filter((e) => e.departamento === departamentoFiltro);
   }, [eventos, departamentoFiltro]);
 
-  // Mapa de día -> categorías presentes (para los puntos de color)
   const eventosPorDia = useMemo(() => {
     const mapa = {};
     eventosFiltrados.forEach((e) => {
@@ -179,232 +196,261 @@ export default function AgendaScreen() {
   };
 
   return (
-    <SafeAreaView style={styles.container}>
-      {/* AppBar */}
-      <View style={styles.appBar}>
-        <View>
-          <Text style={styles.appBarTitle}>Agenda</Text>
-          <Text style={styles.appBarSubtitle}>{MESES[mesActual]} {anioActual}</Text>
-        </View>
-        <TouchableOpacity onPress={() => setShowMenu(true)} style={styles.menuBtn}>
-          <MaterialCommunityIcons name="menu" size={26} color="#283593" />
-        </TouchableOpacity>
-      </View>
-
-      <ScrollView showsVerticalScrollIndicator={false}>
-        {/* Filtro activo */}
-        <View style={styles.filtroChipRow}>
-          <MaterialCommunityIcons name="map-marker-outline" size={16} color="#1976d2" />
-          <Text style={styles.filtroChipText}>{departamentoFiltro}</Text>
-        </View>
-
-        {/* Eventos próximos */}
-        {eventosProximos.length > 0 && (
-          <View style={{ marginTop: 6 }}>
-            <Text style={styles.seccionTitulo}>Eventos próximos</Text>
-            <FlatList
-              data={eventosProximos}
-              keyExtractor={(item) => item.id}
-              horizontal
-              showsHorizontalScrollIndicator={false}
-              contentContainerStyle={{ paddingHorizontal: 12, gap: 10 }}
-              renderItem={({ item }) => (
-                <TouchableOpacity
-                  style={[styles.proximoCard, { borderLeftColor: CATEGORIAS[item.categoria] || '#1976d2' }]}
-                  onPress={() => {
-                    setMesActual(item.fechaJS.getMonth());
-                    setAnioActual(item.fechaJS.getFullYear());
-                    setDiaSeleccionado(item.fechaJS);
-                    setEventoSeleccionado(item);
-                  }}
-                >
-                  <Text style={styles.proximoFecha}>{item.fechaJS.getDate()} {MESES[item.fechaJS.getMonth()].slice(0, 3)}</Text>
-                  <Text style={styles.proximoNombre} numberOfLines={2}>{item.nombre}</Text>
-                </TouchableOpacity>
-              )}
-            />
-          </View>
-        )}
-
-        {/* Separador entre meses / navegación */}
-        <View style={styles.navMesRow}>
-          <TouchableOpacity onPress={() => cambiarMes(-1)} style={styles.navMesBtn}>
-            <MaterialCommunityIcons name="chevron-left" size={24} color="#1976d2" />
-          </TouchableOpacity>
-          <Text style={styles.navMesTexto}>{MESES[mesActual]} {anioActual}</Text>
-          <TouchableOpacity onPress={() => cambiarMes(1)} style={styles.navMesBtn}>
-            <MaterialCommunityIcons name="chevron-right" size={24} color="#1976d2" />
-          </TouchableOpacity>
-        </View>
-
-        {/* Calendario mensual */}
-        <View style={styles.calendarioCard}>
-          <View style={styles.filaDias}>
-            {DIAS_SEMANA.map((d, idx) => (
-              <Text key={idx} style={styles.diaSemanaTexto}>{d}</Text>
-            ))}
-          </View>
-          <View style={styles.gridDias}>
-            {diasDelMes.map((fecha, idx) => {
-              if (!fecha) {
-                return <View key={idx} style={styles.celdaDia} />;
-              }
-              const key = fechaKey(fecha);
-              const categoriasDelDia = eventosPorDia[key] ? Array.from(eventosPorDia[key]) : [];
-              const esSeleccionado = fechaKey(diaSeleccionado) === key;
-              const esHoy = fechaKey(hoy) === key;
-
-              return (
-                <TouchableOpacity
-                  key={idx}
-                  style={[
-                    styles.celdaDia,
-                    esSeleccionado && styles.celdaDiaSeleccionada,
-                  ]}
-                  onPress={() => setDiaSeleccionado(fecha)}
-                >
-                  <Text style={[
-                    styles.numeroDia,
-                    esSeleccionado && styles.numeroDiaSeleccionado,
-                    esHoy && !esSeleccionado && styles.numeroDiaHoy,
-                  ]}>
-                    {fecha.getDate()}
-                  </Text>
-                  <View style={styles.puntosRow}>
-                    {categoriasDelDia.slice(0, 3).map((cat, i) => (
-                      <View key={i} style={[styles.puntoEvento, { backgroundColor: CATEGORIAS[cat] || '#1976d2' }]} />
-                    ))}
-                  </View>
-                </TouchableOpacity>
-              );
-            })}
-          </View>
-
-          {/* Leyenda de categorías */}
-          <View style={styles.leyendaRow}>
-            {Object.entries(CATEGORIAS).map(([nombre, color]) => (
-              <View key={nombre} style={styles.leyendaItem}>
-                <View style={[styles.leyendaPunto, { backgroundColor: color }]} />
-                <Text style={styles.leyendaTexto}>{nombre}</Text>
-              </View>
-            ))}
-          </View>
-        </View>
-
-        {/* Tarjeta del evento seleccionado */}
-        <View style={{ marginHorizontal: 12, marginTop: 12, marginBottom: 24 }}>
-          <Text style={styles.seccionTitulo}>
-            {eventosDelDiaSeleccionado.length > 0 ? 'Evento del día' : 'Sin eventos este día'}
-          </Text>
-
-          {eventoSeleccionado ? (
-            <View style={styles.eventoCard}>
-              {eventoSeleccionado.imagen ? (
-                <Image source={{ uri: eventoSeleccionado.imagen }} style={styles.eventoImagen} />
-              ) : null}
-
-              <View style={{ padding: 14 }}>
-                <View style={[styles.categoriaBadge, { backgroundColor: (CATEGORIAS[eventoSeleccionado.categoria] || '#1976d2') + '22' }]}>
-                  <Text style={[styles.categoriaBadgeTexto, { color: CATEGORIAS[eventoSeleccionado.categoria] || '#1976d2' }]}>
-                    {eventoSeleccionado.categoria}
-                  </Text>
-                </View>
-
-                <Text style={styles.eventoNombre}>{eventoSeleccionado.nombre}</Text>
-
-                <View style={styles.eventoInfoRow}>
-                  <MaterialCommunityIcons name="calendar" size={18} color="#1976d2" />
-                  <Text style={styles.eventoInfoTexto}>
-                    {eventoSeleccionado.fechaJS.getDate()} de {MESES[eventoSeleccionado.fechaJS.getMonth()]}
-                  </Text>
-                </View>
-
-                {(eventoSeleccionado.horaInicio || eventoSeleccionado.horaFin) && (
-                  <View style={styles.eventoInfoRow}>
-                    <MaterialCommunityIcons name="clock-outline" size={18} color="#1976d2" />
-                    <Text style={styles.eventoInfoTexto}>
-                      {eventoSeleccionado.horaInicio}{eventoSeleccionado.horaFin ? ` – ${eventoSeleccionado.horaFin}` : ''}
-                    </Text>
-                  </View>
-                )}
-
-                {eventoSeleccionado.ubicacion && (
-                  <View style={styles.eventoInfoRow}>
-                    <MaterialCommunityIcons name="map-marker" size={18} color="#1976d2" />
-                    <Text style={styles.eventoInfoTexto}>{eventoSeleccionado.ubicacion}</Text>
-                  </View>
-                )}
-
-                {/* Mini mapa 3D */}
-                {eventoSeleccionado.lat && eventoSeleccionado.lng && (
-                  <View style={styles.miniMapaContenedor}>
-                    <MapView
-                      provider={PROVIDER_GOOGLE}
-                      style={{ flex: 1 }}
-                      scrollEnabled={false}
-                      zoomEnabled={false}
-                      pitchEnabled={false}
-                      rotateEnabled={false}
-                      showsBuildings
-                      initialCamera={{
-                        center: { latitude: eventoSeleccionado.lat, longitude: eventoSeleccionado.lng },
-                        pitch: 60,
-                        heading: 20,
-                        altitude: 800,
-                        zoom: 17,
-                      }}
-                    >
-                      <Marker
-                        coordinate={{ latitude: eventoSeleccionado.lat, longitude: eventoSeleccionado.lng }}
-                        title={eventoSeleccionado.nombre}
-                      />
-                    </MapView>
-                  </View>
-                )}
-
-                <TouchableOpacity
-                  style={styles.verDetallesBtn}
-                  onPress={() => router.push(`/evento/${eventoSeleccionado.id}`)}
-                >
-                  <Text style={styles.verDetallesTexto}>Ver detalles</Text>
-                </TouchableOpacity>
-              </View>
+    <SafeAreaView style={styles.safeArea}>
+      <View style={styles.container}>
+        <ScrollView
+          style={{ flex: 1 }}
+          contentContainerStyle={{ paddingBottom: 32 }}
+          showsVerticalScrollIndicator={false}
+        >
+          {/* Header: nombre de usuario + mes actual*/}
+          <View style={styles.headerRow}>
+            <View style={{ flex: 1 }}>
+              <Text style={styles.title}>Agenda de {userName}</Text>
+              <Text style={styles.subtitle}>{MESES[mesActual]} {anioActual}</Text>
             </View>
-          ) : (
-            <View style={styles.sinEventoCard}>
-              <MaterialCommunityIcons name="calendar-blank-outline" size={30} color="#bbb" />
-              <Text style={{ color: '#888', fontSize: 13, marginTop: 6 }}>No hay eventos para el día seleccionado.</Text>
+            <TouchableOpacity onPress={() => setShowMenu(true)} style={styles.menuBtn} hitSlop={8}>
+              <MaterialCommunityIcons name="menu" size={24} color={COLOR_TEXT_DARK} />
+            </TouchableOpacity>
+          </View>
+
+          {/* Filtro activo*/}
+          <View style={styles.chipsScrollViewSingle}>
+            <View style={[styles.chip, styles.chipActive, styles.filtroChip]}>
+              <MaterialCommunityIcons name="map-marker-outline" size={16} color="#fff" style={{ marginRight: 6 }} />
+              <Text style={[styles.chipText, styles.chipTextActive]}>{departamentoFiltro}</Text>
+            </View>
+          </View>
+
+          {/* Eventos próximos */}
+          {eventosProximos.length > 0 && (
+            <View style={styles.sectionBlock}>
+              <Text style={styles.sectionTitle}>Eventos próximos</Text>
+              <ScrollView
+                horizontal
+                showsHorizontalScrollIndicator={false}
+                contentContainerStyle={styles.carouselRow}
+              >
+                {eventosProximos.map((item) => (
+                  <TouchableOpacity
+                    key={item.id}
+                    style={styles.carouselCard}
+                    activeOpacity={0.9}
+                    onPress={() => {
+                      setMesActual(item.fechaJS.getMonth());
+                      setAnioActual(item.fechaJS.getFullYear());
+                      setDiaSeleccionado(item.fechaJS);
+                      setEventoSeleccionado(item);
+                    }}
+                  >
+                    <View style={styles.carouselImageWrap}>
+                      {item.imagen ? (
+                        <Image source={{ uri: item.imagen }} style={styles.carouselImage} resizeMode="cover" />
+                      ) : (
+                        <View style={[styles.carouselImage, styles.imagePlaceholder]}>
+                          <MaterialCommunityIcons name="image-outline" size={24} color="#c7d0d6" />
+                        </View>
+                      )}
+                      <View style={[styles.statusBadge, { backgroundColor: (CATEGORIAS[item.categoria] || COLOR_TEAL) + '22', borderColor: CATEGORIAS[item.categoria] || COLOR_TEAL }]}>
+                        <Text style={[styles.statusBadgeText, { color: CATEGORIAS[item.categoria] || COLOR_TEAL }]}>{item.categoria}</Text>
+                      </View>
+                    </View>
+                    <View style={styles.carouselBody}>
+                      <Text style={styles.cardName} numberOfLines={1}>{item.nombre}</Text>
+                      <Text style={styles.cardSecondary} numberOfLines={1}>
+                        {item.fechaJS.getDate()} de {MESES[item.fechaJS.getMonth()]}
+                      </Text>
+                    </View>
+                  </TouchableOpacity>
+                ))}
+              </ScrollView>
             </View>
           )}
 
-          {eventosDelDiaSeleccionado.length > 1 && (
-            <View style={{ marginTop: 10 }}>
-              {eventosDelDiaSeleccionado.filter((e) => e.id !== eventoSeleccionado?.id).map((e) => (
-                <TouchableOpacity key={e.id} style={styles.otroEventoRow} onPress={() => setEventoSeleccionado(e)}>
-                  <View style={[styles.puntoEvento, { backgroundColor: CATEGORIAS[e.categoria] || '#1976d2', marginRight: 8 }]} />
-                  <Text style={styles.otroEventoTexto} numberOfLines={1}>{e.nombre}</Text>
-                  <Text style={styles.otroEventoHora}>{e.horaInicio}</Text>
-                </TouchableOpacity>
+          {/* Separador entre meses / navegación */}
+          <View style={styles.navMesRow}>
+            <TouchableOpacity onPress={() => cambiarMes(-1)} style={styles.navMesBtn}>
+              <MaterialCommunityIcons name="chevron-left" size={22} color={COLOR_TEAL} />
+            </TouchableOpacity>
+            <Text style={styles.navMesTexto}>{MESES[mesActual]} {anioActual}</Text>
+            <TouchableOpacity onPress={() => cambiarMes(1)} style={styles.navMesBtn}>
+              <MaterialCommunityIcons name="chevron-right" size={22} color={COLOR_TEAL} />
+            </TouchableOpacity>
+          </View>
+
+          {/* Calendario mensual */}
+          <View style={styles.calendarioCard}>
+            <View style={styles.filaDias}>
+              {DIAS_SEMANA.map((d, idx) => (
+                <Text key={idx} style={styles.diaSemanaTexto}>{d}</Text>
               ))}
             </View>
-          )}
-        </View>
-      </ScrollView>
+            <View style={styles.gridDias}>
+              {diasDelMes.map((fecha, idx) => {
+                if (!fecha) {
+                  return <View key={idx} style={styles.celdaDia} />;
+                }
+                const key = fechaKey(fecha);
+                const categoriasDelDia = eventosPorDia[key] ? Array.from(eventosPorDia[key]) : [];
+                const esSeleccionado = fechaKey(diaSeleccionado) === key;
+                const esHoy = fechaKey(hoy) === key;
+
+                return (
+                  <TouchableOpacity
+                    key={idx}
+                    style={[
+                      styles.celdaDia,
+                      esSeleccionado && styles.celdaDiaSeleccionada,
+                    ]}
+                    onPress={() => setDiaSeleccionado(fecha)}
+                  >
+                    <Text style={[
+                      styles.numeroDia,
+                      esSeleccionado && styles.numeroDiaSeleccionado,
+                      esHoy && !esSeleccionado && styles.numeroDiaHoy,
+                    ]}>
+                      {fecha.getDate()}
+                    </Text>
+                    <View style={styles.puntosRow}>
+                      {categoriasDelDia.slice(0, 3).map((cat, i) => (
+                        <View key={i} style={[styles.puntoEvento, { backgroundColor: CATEGORIAS[cat] || COLOR_TEAL }]} />
+                      ))}
+                    </View>
+                  </TouchableOpacity>
+                );
+              })}
+            </View>
+
+            {/* Leyenda de categorías */}
+            <View style={styles.leyendaRow}>
+              {Object.entries(CATEGORIAS).map(([nombre, color]) => (
+                <View key={nombre} style={styles.leyendaItem}>
+                  <View style={[styles.leyendaPunto, { backgroundColor: color }]} />
+                  <Text style={styles.leyendaTexto}>{nombre}</Text>
+                </View>
+              ))}
+            </View>
+          </View>
+
+          {/* Tarjeta del evento seleccionado */}
+          <View style={{ marginHorizontal: HORIZONTAL_PADDING, marginTop: 16 }}>
+            <Text style={[styles.sectionTitle, { marginLeft: 0 }]}>
+              {eventosDelDiaSeleccionado.length > 0 ? 'Evento del día' : 'Sin eventos este día'}
+            </Text>
+
+            {eventoSeleccionado ? (
+              <View style={styles.eventoCard}>
+                {eventoSeleccionado.imagen ? (
+                  <Image source={{ uri: eventoSeleccionado.imagen }} style={styles.eventoImagen} />
+                ) : null}
+
+                <View style={{ padding: 16 }}>
+                  <View style={[styles.statusBadge, styles.badgeInline, { backgroundColor: (CATEGORIAS[eventoSeleccionado.categoria] || COLOR_TEAL) + '22', borderColor: CATEGORIAS[eventoSeleccionado.categoria] || COLOR_TEAL }]}>
+                    <Text style={[styles.statusBadgeText, { color: CATEGORIAS[eventoSeleccionado.categoria] || COLOR_TEAL }]}>
+                      {eventoSeleccionado.categoria}
+                    </Text>
+                  </View>
+
+                  <Text style={styles.eventoNombre}>{eventoSeleccionado.nombre}</Text>
+
+                  <View style={styles.eventoInfoRow}>
+                    <MaterialCommunityIcons name="calendar" size={18} color={COLOR_TEAL} />
+                    <Text style={styles.eventoInfoTexto}>
+                      {eventoSeleccionado.fechaJS.getDate()} de {MESES[eventoSeleccionado.fechaJS.getMonth()]}
+                    </Text>
+                  </View>
+
+                  {(eventoSeleccionado.horaInicio || eventoSeleccionado.horaFin) && (
+                    <View style={styles.eventoInfoRow}>
+                      <MaterialCommunityIcons name="clock-outline" size={18} color={COLOR_TEAL} />
+                      <Text style={styles.eventoInfoTexto}>
+                        {eventoSeleccionado.horaInicio}{eventoSeleccionado.horaFin ? ` – ${eventoSeleccionado.horaFin}` : ''}
+                      </Text>
+                    </View>
+                  )}
+
+                  {eventoSeleccionado.ubicacion && (
+                    <View style={styles.eventoInfoRow}>
+                      <MaterialCommunityIcons name="map-marker" size={18} color={COLOR_TEAL} />
+                      <Text style={styles.eventoInfoTexto}>{eventoSeleccionado.ubicacion}</Text>
+                    </View>
+                  )}
+
+                  {/* Mini mapa 3D */}
+                  {eventoSeleccionado.lat && eventoSeleccionado.lng && (
+                    <View style={styles.miniMapaContenedor}>
+                      <MapView
+                        provider={PROVIDER_GOOGLE}
+                        style={{ flex: 1 }}
+                        scrollEnabled={false}
+                        zoomEnabled={false}
+                        pitchEnabled={false}
+                        rotateEnabled={false}
+                        showsBuildings
+                        initialCamera={{
+                          center: { latitude: eventoSeleccionado.lat, longitude: eventoSeleccionado.lng },
+                          pitch: 60,
+                          heading: 20,
+                          altitude: 800,
+                          zoom: 17,
+                        }}
+                      >
+                        <Marker
+                          coordinate={{ latitude: eventoSeleccionado.lat, longitude: eventoSeleccionado.lng }}
+                          title={eventoSeleccionado.nombre}
+                        />
+                      </MapView>
+                    </View>
+                  )}
+
+                  <TouchableOpacity
+                    style={styles.verDetallesBtn}
+                    activeOpacity={0.85}
+                    onPress={() => router.push(`/evento/${eventoSeleccionado.id}`)}
+                  >
+                    <Text style={styles.verDetallesTexto}>Ver detalles</Text>
+                  </TouchableOpacity>
+                </View>
+              </View>
+            ) : (
+              <View style={styles.emptyState}>
+                <View style={styles.emptyIconCircle}>
+                  <MaterialCommunityIcons name="calendar-blank-outline" size={30} color={COLOR_TEAL} />
+                </View>
+                <Text style={styles.emptyTitle}>No hay eventos este día</Text>
+                <Text style={styles.emptySubtitle}>Elige otra fecha en el calendario para ver qué hay disponible</Text>
+              </View>
+            )}
+
+            {eventosDelDiaSeleccionado.length > 1 && (
+              <View style={{ marginTop: 12 }}>
+                {eventosDelDiaSeleccionado.filter((e) => e.id !== eventoSeleccionado?.id).map((e) => (
+                  <TouchableOpacity key={e.id} style={styles.otroEventoRow} onPress={() => setEventoSeleccionado(e)}>
+                    <View style={[styles.puntoEvento, { backgroundColor: CATEGORIAS[e.categoria] || COLOR_TEAL, marginRight: 8 }]} />
+                    <Text style={styles.otroEventoTexto} numberOfLines={1}>{e.nombre}</Text>
+                    <Text style={styles.otroEventoHora}>{e.horaInicio}</Text>
+                  </TouchableOpacity>
+                ))}
+              </View>
+            )}
+          </View>
+        </ScrollView>
+      </View>
 
       {/* Menú de opciones */}
       <Modal visible={showMenu} transparent animationType="fade" onRequestClose={() => setShowMenu(false)}>
-        <TouchableOpacity style={styles.modalFondo} activeOpacity={1} onPress={() => setShowMenu(false)}>
+        <TouchableOpacity style={styles.modalBackdropBottom} activeOpacity={1} onPress={() => setShowMenu(false)}>
           <View style={styles.menuCard}>
             <TouchableOpacity style={styles.menuItem} onPress={() => { setShowMenu(false); setShowDeptModal(true); }}>
-              <MaterialCommunityIcons name="filter-variant" size={20} color="#283593" />
+              <MaterialCommunityIcons name="filter-variant" size={20} color={COLOR_TEAL} />
               <Text style={styles.menuItemTexto}>Filtrar por departamento</Text>
             </TouchableOpacity>
             <TouchableOpacity style={styles.menuItem} onPress={() => { setShowMenu(false); router.push('/mis-reservas'); }}>
-              <MaterialCommunityIcons name="ticket-confirmation-outline" size={20} color="#283593" />
+              <MaterialCommunityIcons name="ticket-confirmation-outline" size={20} color={COLOR_TEAL} />
               <Text style={styles.menuItemTexto}>Mis reservas</Text>
             </TouchableOpacity>
             <TouchableOpacity style={styles.menuItem} onPress={() => { setShowMenu(false); router.push('/eventos-favoritos'); }}>
-              <MaterialCommunityIcons name="heart-outline" size={20} color="#283593" />
+              <MaterialCommunityIcons name="heart-outline" size={20} color={COLOR_TEAL} />
               <Text style={styles.menuItemTexto}>Eventos favoritos</Text>
             </TouchableOpacity>
           </View>
@@ -413,7 +459,7 @@ export default function AgendaScreen() {
 
       {/* Modal de filtro por departamento */}
       <Modal visible={showDeptModal} transparent animationType="slide" onRequestClose={() => setShowDeptModal(false)}>
-        <TouchableOpacity style={styles.modalFondo} activeOpacity={1} onPress={() => setShowDeptModal(false)}>
+        <TouchableOpacity style={styles.modalBackdropBottom} activeOpacity={1} onPress={() => setShowDeptModal(false)}>
           <View style={styles.deptCard}>
             <Text style={styles.deptTitulo}>Filtrar por departamento</Text>
             <ScrollView style={{ maxHeight: 380 }}>
@@ -426,7 +472,7 @@ export default function AgendaScreen() {
                   <MaterialCommunityIcons
                     name={departamentoFiltro === dep ? 'radiobox-marked' : 'radiobox-blank'}
                     size={18}
-                    color="#1976d2"
+                    color={COLOR_TEAL}
                   />
                   <Text style={styles.deptItemTexto}>{dep}</Text>
                 </TouchableOpacity>
@@ -440,96 +486,116 @@ export default function AgendaScreen() {
 }
 
 const styles = StyleSheet.create({
+  safeArea: {
+    flex: 1,
+    backgroundColor: '#f6fafd',
+    paddingTop: Platform.OS === 'android' ? ANDROID_STATUSBAR_HEIGHT : 0,
+  },
   container: { flex: 1, backgroundColor: '#f6fafd' },
 
-  appBar: {
+  headerRow: {
     flexDirection: 'row',
+    alignItems: 'flex-start',
     justifyContent: 'space-between',
-    alignItems: 'center',
-    backgroundColor: '#fff',
-    paddingHorizontal: 18,
-    paddingVertical: 14,
-    borderBottomLeftRadius: 20,
-    borderBottomRightRadius: 20,
-    shadowColor: '#000',
-    shadowOpacity: 0.05,
-    shadowRadius: 6,
-    elevation: 2,
+    marginTop: 12,
+    marginHorizontal: HORIZONTAL_PADDING,
+    marginBottom: 14,
   },
-  appBarTitle: { fontFamily: 'Montserrat-Bold', color: '#283593', fontSize: 18 },
-  appBarSubtitle: { color: '#888', fontSize: 13, marginTop: 2 },
-  menuBtn: { padding: 6 },
+  title: {
+    fontSize: 20,
+    fontWeight: 'bold',
+    color: COLOR_TEXT_DARK,
+    fontFamily: 'Montserrat-Bold',
+  },
+  subtitle: {
+    fontSize: 14,
+    color: COLOR_TEXT_MUTED,
+    marginTop: 2,
+    fontFamily: 'Montserrat-Regular',
+  },
+  menuBtn: { padding: 4, marginTop: 2 },
 
-  filtroChipRow: {
+  // Chips 
+  chipsScrollViewSingle: { paddingHorizontal: HORIZONTAL_PADDING, marginBottom: 16 },
+  chip: {
     flexDirection: 'row',
     alignItems: 'center',
-    alignSelf: 'flex-start',
-    backgroundColor: '#e3f2fd',
-    borderRadius: 20,
-    paddingHorizontal: 12,
-    paddingVertical: 6,
-    marginHorizontal: 12,
-    marginTop: 12,
-    gap: 6,
-  },
-  filtroChipText: { color: '#1976d2', fontFamily: 'Montserrat-SemiBold', fontSize: 13 },
-
-  seccionTitulo: {
-    fontFamily: 'Montserrat-SemiBold',
-    color: '#283593',
-    fontSize: 15,
-    marginHorizontal: 12,
-    marginTop: 14,
-    marginBottom: 8,
-  },
-
-  proximoCard: {
+    height: 36,
+    borderRadius: 10,
+    paddingHorizontal: 14,
+    borderWidth: 1,
+    borderColor: COLOR_TEAL,
     backgroundColor: '#fff',
-    borderRadius: 12,
-    padding: 10,
-    width: 130,
-    borderLeftWidth: 4,
-    shadowColor: '#000',
-    shadowOpacity: 0.05,
-    shadowRadius: 4,
-    elevation: 1,
+    alignSelf: 'flex-start',
   },
-  proximoFecha: { color: '#888', fontSize: 12, marginBottom: 4, fontFamily: 'Montserrat-SemiBold' },
-  proximoNombre: { color: '#222', fontSize: 13, fontFamily: 'Montserrat-SemiBold' },
+  chipActive: { backgroundColor: COLOR_TEAL, borderColor: COLOR_TEAL },
+  chipText: { fontSize: 13, color: COLOR_TEAL, fontWeight: '600', fontFamily: 'Montserrat-Medium' },
+  chipTextActive: { color: '#fff' },
+  filtroChip: {},
+
+  sectionBlock: { marginBottom: 20 },
+  sectionTitle: {
+    fontSize: 16,
+    fontWeight: 'bold',
+    color: COLOR_TEXT_DARK,
+    marginLeft: HORIZONTAL_PADDING,
+    marginBottom: 12,
+    fontFamily: 'Montserrat-Bold',
+  },
+
+  carouselRow: { paddingHorizontal: HORIZONTAL_PADDING, gap: 12 },
+  carouselCard: {
+    width: CAROUSEL_CARD_WIDTH,
+    backgroundColor: '#fff',
+    borderRadius: 16,
+    overflow: 'hidden',
+    borderWidth: 1,
+    borderColor: COLOR_TEAL_SOFT,
+    elevation: 2,
+    shadowColor: '#000',
+    shadowOpacity: 0.08,
+    shadowRadius: 8,
+    shadowOffset: { width: 0, height: 3 },
+  },
+  carouselImageWrap: { width: '100%', height: 110, backgroundColor: '#eceff1' },
+  carouselImage: { width: '100%', height: '100%' },
+  carouselBody: { padding: 12 },
 
   navMesRow: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
-    marginTop: 16,
+    marginBottom: 14,
     gap: 20,
   },
   navMesBtn: {
-    backgroundColor: '#e3f2fd',
+    backgroundColor: COLOR_TEAL_SOFT,
     borderRadius: 20,
     padding: 6,
   },
   navMesTexto: {
     fontFamily: 'Montserrat-Bold',
-    color: '#283593',
-    fontSize: 16,
+    color: COLOR_TEXT_DARK,
+    fontSize: 15,
     minWidth: 150,
     textAlign: 'center',
   },
 
   calendarioCard: {
     backgroundColor: '#fff',
-    borderRadius: 18,
-    marginHorizontal: 12,
-    marginTop: 10,
+    borderRadius: 16,
+    marginHorizontal: HORIZONTAL_PADDING,
     padding: 14,
-    shadowColor: '#000',
-    shadowOpacity: 0.06,
-    shadowRadius: 8,
+    borderWidth: 1,
+    borderColor: COLOR_TEAL_SOFT,
     elevation: 2,
+    shadowColor: '#000',
+    shadowOpacity: 0.08,
+    shadowRadius: 8,
+    shadowOffset: { width: 0, height: 3 },
   },
   filaDias: { flexDirection: 'row', justifyContent: 'space-between', marginBottom: 6 },
-  diaSemanaTexto: { width: `${100 / 7}%`, textAlign: 'center', color: '#888', fontSize: 12, fontFamily: 'Montserrat-SemiBold' },
+  diaSemanaTexto: { width: `${100 / 7}%`, textAlign: 'center', color: COLOR_TEXT_MUTED, fontSize: 12, fontFamily: 'Montserrat-Medium' },
 
   gridDias: { flexDirection: 'row', flexWrap: 'wrap' },
   celdaDia: {
@@ -540,12 +606,12 @@ const styles = StyleSheet.create({
     marginBottom: 4,
   },
   celdaDiaSeleccionada: {
-    backgroundColor: '#1976d2',
+    backgroundColor: COLOR_TEAL,
     borderRadius: 10,
   },
-  numeroDia: { color: '#333', fontSize: 14 },
+  numeroDia: { color: COLOR_TEXT_DARK, fontSize: 14, fontFamily: 'Montserrat-Regular' },
   numeroDiaSeleccionado: { color: '#fff', fontFamily: 'Montserrat-Bold' },
-  numeroDiaHoy: { color: '#1976d2', fontFamily: 'Montserrat-Bold' },
+  numeroDiaHoy: { color: COLOR_ORANGE, fontFamily: 'Montserrat-Bold' },
 
   puntosRow: { flexDirection: 'row', gap: 2, marginTop: 2, height: 6 },
   puntoEvento: { width: 5, height: 5, borderRadius: 3 },
@@ -553,64 +619,89 @@ const styles = StyleSheet.create({
   leyendaRow: { flexDirection: 'row', flexWrap: 'wrap', marginTop: 12, gap: 10 },
   leyendaItem: { flexDirection: 'row', alignItems: 'center', gap: 4 },
   leyendaPunto: { width: 8, height: 8, borderRadius: 4 },
-  leyendaTexto: { color: '#666', fontSize: 11 },
+  leyendaTexto: { color: COLOR_TEXT_MUTED, fontSize: 11, fontFamily: 'Montserrat-Regular' },
 
   eventoCard: {
     backgroundColor: '#fff',
-    borderRadius: 18,
+    borderRadius: 16,
     overflow: 'hidden',
-    shadowColor: '#000',
-    shadowOpacity: 0.06,
-    shadowRadius: 8,
+    borderWidth: 1,
+    borderColor: COLOR_TEAL_SOFT,
     elevation: 2,
+    shadowColor: '#000',
+    shadowOpacity: 0.08,
+    shadowRadius: 8,
+    shadowOffset: { width: 0, height: 3 },
   },
   eventoImagen: { width: '100%', height: 150 },
-  categoriaBadge: { alignSelf: 'flex-start', borderRadius: 8, paddingHorizontal: 10, paddingVertical: 4, marginBottom: 8 },
-  categoriaBadgeTexto: { fontFamily: 'Montserrat-SemiBold', fontSize: 12 },
-  eventoNombre: { fontFamily: 'Montserrat-Bold', color: '#222', fontSize: 17, marginBottom: 10 },
+  eventoNombre: { fontFamily: 'Montserrat-Bold', color: COLOR_TEXT_DARK, fontSize: 17, marginBottom: 10, marginTop: 8 },
   eventoInfoRow: { flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 8 },
-  eventoInfoTexto: { color: '#444', fontSize: 14 },
+  eventoInfoTexto: { color: '#444', fontSize: 14, fontFamily: 'Montserrat-Regular' },
 
   miniMapaContenedor: {
     height: 140,
     borderRadius: 12,
     overflow: 'hidden',
     marginTop: 4,
-    marginBottom: 12,
+    marginBottom: 14,
   },
 
   verDetallesBtn: {
-    backgroundColor: '#1976d2',
+    backgroundColor: COLOR_TEAL,
     borderRadius: 10,
     paddingVertical: 12,
     alignItems: 'center',
     marginTop: 4,
   },
-  verDetallesTexto: { color: '#fff', fontFamily: 'Montserrat-SemiBold', fontSize: 15 },
+  verDetallesTexto: { color: '#fff', fontFamily: 'Montserrat-Bold', fontSize: 15 },
 
-  sinEventoCard: {
-    backgroundColor: '#fff',
-    borderRadius: 18,
-    padding: 24,
-    alignItems: 'center',
-    shadowColor: '#000',
-    shadowOpacity: 0.04,
-    shadowRadius: 6,
-    elevation: 1,
+  // Badges de categoría
+  statusBadge: {
+    position: 'absolute',
+    top: 8,
+    left: 8,
+    borderRadius: 8,
+    borderWidth: 1,
+    paddingHorizontal: 8,
+    paddingVertical: 2,
   },
+  statusBadgeText: { fontSize: 10.5, fontWeight: '700', fontFamily: 'Montserrat-Bold' },
+  badgeInline: { position: 'relative', top: 0, left: 0, alignSelf: 'flex-start', marginBottom: 4 },
+
+  cardName: { fontSize: 13.5, fontWeight: 'bold', color: COLOR_TEXT_DARK, fontFamily: 'Montserrat-Bold', marginBottom: 3 },
+  cardSecondary: { fontSize: 11.5, color: COLOR_TEXT_MUTED, fontFamily: 'Montserrat-Regular' },
 
   otroEventoRow: {
     flexDirection: 'row',
     alignItems: 'center',
     backgroundColor: '#fff',
     borderRadius: 10,
+    borderWidth: 1,
+    borderColor: COLOR_TEAL_SOFT,
     padding: 10,
     marginBottom: 6,
   },
-  otroEventoTexto: { flex: 1, color: '#444', fontSize: 13 },
-  otroEventoHora: { color: '#888', fontSize: 12 },
+  otroEventoTexto: { flex: 1, color: '#444', fontSize: 13, fontFamily: 'Montserrat-Regular' },
+  otroEventoHora: { color: COLOR_TEXT_MUTED, fontSize: 12, fontFamily: 'Montserrat-Regular' },
 
-  modalFondo: { flex: 1, backgroundColor: 'rgba(0,0,0,0.3)', justifyContent: 'flex-end' },
+  imagePlaceholder: { alignItems: 'center', justifyContent: 'center' },
+
+  // Empty state
+  emptyState: { alignItems: 'center', paddingHorizontal: HORIZONTAL_PADDING, paddingTop: 24, paddingBottom: 12 },
+  emptyIconCircle: {
+    width: 60,
+    height: 60,
+    borderRadius: 30,
+    backgroundColor: COLOR_TEAL_SOFT,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: 6,
+  },
+  emptyTitle: { fontSize: 14, fontWeight: '700', color: '#333', textAlign: 'center', marginTop: 10, marginBottom: 4, fontFamily: 'Montserrat-Bold' },
+  emptySubtitle: { fontSize: 12.5, color: COLOR_TEXT_MUTED, textAlign: 'center', lineHeight: 18, maxWidth: 280, fontFamily: 'Montserrat-Regular' },
+
+  // Modales
+  modalBackdropBottom: { flex: 1, backgroundColor: 'rgba(0,0,0,0.35)', justifyContent: 'flex-end' },
   menuCard: {
     backgroundColor: '#fff',
     borderTopLeftRadius: 20,
@@ -619,7 +710,7 @@ const styles = StyleSheet.create({
     gap: 4,
   },
   menuItem: { flexDirection: 'row', alignItems: 'center', gap: 12, paddingVertical: 14 },
-  menuItemTexto: { color: '#283593', fontSize: 15, fontFamily: 'Montserrat-SemiBold' },
+  menuItemTexto: { color: COLOR_TEXT_DARK, fontSize: 15, fontFamily: 'Montserrat-Medium' },
 
   deptCard: {
     backgroundColor: '#fff',
@@ -628,7 +719,7 @@ const styles = StyleSheet.create({
     padding: 18,
     maxHeight: '70%',
   },
-  deptTitulo: { fontFamily: 'Montserrat-Bold', color: '#283593', fontSize: 16, marginBottom: 10 },
+  deptTitulo: { fontFamily: 'Montserrat-Bold', color: COLOR_TEXT_DARK, fontSize: 16, marginBottom: 10 },
   deptItem: { flexDirection: 'row', alignItems: 'center', gap: 10, paddingVertical: 10 },
-  deptItemTexto: { color: '#333', fontSize: 14 },
+  deptItemTexto: { color: '#333', fontSize: 14, fontFamily: 'Montserrat-Regular' },
 });
