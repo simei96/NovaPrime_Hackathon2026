@@ -47,7 +47,8 @@ const TIMELINE_EVENTS = [
 export default function Home() {
   const router = useRouter();
   const [user, setUser] = useState(auth.currentUser || null);
-  const [logoUrl, setLogoUrl] = useState(null);
+  const [logoURL, setLogoURL] = useState(null);
+  const [logoHeaderId, setLogoHeaderId] = useState(null);
   const [promoTour, setPromoTour] = useState(null);
   const [loading, setLoading] = useState(true);
   const [slidesLoaded, setSlidesLoaded] = useState([]);
@@ -71,9 +72,14 @@ export default function Home() {
         const promoTourSnap = await getDoc(promoTourRef);
         if (promoTourSnap.exists()) setPromoTour(promoTourSnap.data());
 
-        const logoRef = doc(db, "WelcomeSlide", "E6E9tiI2uJkTZqG5DcAC");
+        // Logo del header: Ubicacion -> WelcomeConfig/Welcome_001 (campos logoURL y logoHeaderId)
+        const logoRef = doc(db, "WelcomeConfig", "Welcome_001");
         const logoSnap = await getDoc(logoRef);
-        if (logoSnap.exists()) setLogoUrl(logoSnap.data().ImagenURL);
+        if (logoSnap.exists()) {
+          const logoData = logoSnap.data();
+          setLogoURL(logoData.logoURL || null);
+          setLogoHeaderId(logoData.logoHeaderId || null);
+        }
 
         const volcanImgRef = doc(db, "CardPrincipal", "Card_002");
         const somotoImgRef = doc(db, "CardPrincipal", "Card_003");
@@ -168,9 +174,9 @@ export default function Home() {
             <View style={{ flex: 1 }} />
 
             {/* Logo */}
-            {logoUrl ? (
+            {logoURL ? (
               <Image
-                source={{ uri: logoUrl }}
+                source={{ uri: logoURL }}
                 style={[styles.logoImage, { width: 100, height: 30 }]}
                 resizeMode="contain"
               />
@@ -178,7 +184,7 @@ export default function Home() {
               <Text
                 style={{ color: "#008CBF", fontWeight: "bold", fontSize: 18 }}
               >
-                NIKAIA!
+                {logoHeaderId || "NIKAIA!"}
               </Text>
             )}
           </View>
@@ -347,7 +353,7 @@ export default function Home() {
             Descubre nuevos destinos
           </Text>
 
-          {/* Snap / Peek Carousel horizontal (usa los valores originales del carrusel) */}
+          {/* Snap / Peek Carousel horizontal */}
           <ScrollView
             horizontal
             showsHorizontalScrollIndicator={false}
@@ -923,8 +929,8 @@ const styles = StyleSheet.create({
     borderColor: COLOR_ORANGE,
     borderWidth: 2,
     marginHorizontal: 15,
-    marginTop: 5,      // La sube un poco
-    marginBottom: 110,  // Espacio blanco debajo
+    marginTop: 5,
+    marginBottom: 110,
     padding: 16,
     alignItems: "center",
   },
