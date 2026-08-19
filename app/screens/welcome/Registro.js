@@ -3,9 +3,13 @@ import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import { createUserWithEmailAndPassword, updateProfile } from 'firebase/auth';
-import { useRef, useState } from 'react';
-import {ActivityIndicator, Alert, KeyboardAvoidingView, Platform, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View, } from 'react-native';
-import { auth } from '../../../firebaseConfig';
+import { collection, doc, getDocs, limit, query, serverTimestamp, setDoc, where, } from 'firebase/firestore';
+import { useCallback, useRef, useState } from 'react';
+import {
+  ActivityIndicator, Alert, KeyboardAvoidingView, Platform, ScrollView, StyleSheet, Text, TextInput,
+  TouchableOpacity, View,
+} from 'react-native';
+import { auth, db } from '../../../firebaseConfig';
 
 //Paleta de colores
 const COLOR_TEAL = '#2EAD9A';
@@ -14,6 +18,7 @@ const COLOR_TEAL_SOFT = '#D9F0EC';
 const COLOR_ORANGE_SOFT = 'rgba(217,110,50,0.16)';
 const COLOR_TEXT_DARK = '#222';
 const COLOR_TEXT_MUTED = '#7A8489';
+const COLOR_DANGER = '#D9483C';
 
 const HEADER_HEIGHT = 190;
 
@@ -27,8 +32,16 @@ const CATEGORIAS = [
   { label: 'Historia', icon: 'book', color: '#fff', slug: 'historia' },
 ];
 
-//Helpers
+// Requisitos de la contraseña
+const PASSWORD_RULES = [
+  { key: 'minLength', label: 'Al menos 8 caracteres', test: (v) => v.length >= 8 },
+  { key: 'hasUpper', label: 'Una letra mayúscula', test: (v) => /[A-Z]/.test(v) },
+  { key: 'hasLower', label: 'Una letra minúscula', test: (v) => /[a-z]/.test(v) },
+  { key: 'hasNumber', label: 'Un número', test: (v) => /\d/.test(v) },
+  { key: 'hasSpecial', label: 'Un carácter especial (!@#$...)', test: (v) => /[^A-Za-z0-9]/.test(v) },
+];
 
+//Helpers
 const isValidEmail = (value) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value.trim());
 const isValidUsername = (value) => /^[a-zA-Z0-9_.]{3,20}$/.test(value.trim());
 
@@ -43,9 +56,15 @@ export default function Registro() {
   const [confirmPassword, setConfirmPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
   const [showConfirm, setShowConfirm] = useState(false);
+  const [showPasswordRules, setShowPasswordRules] = useState(false);
   const [selectedGustos, setSelectedGustos] = useState([]);
-  const [userType, setUserType] = useState('visitante'); // 'visitante' | 'anfitrion'
+  const [userType, setUserType] = useState('visitante'); // 'visitante' | 'anfitrion' estos son los modos disponibles
   const [submitting, setSubmitting] = useState(false);
+
+  // Estado de disponibilidad de nombre completo
+  // 'idle' | 'checking' | 'available' | 'taken'
+  const [fullNameStatus, setFullNameStatus] = useState('idle');
+  const [usernameStatus, setUsernameStatus] = useState('idle');
 
   const [errors, setErrors] = useState({
     fullName: '',
@@ -60,8 +79,9 @@ export default function Registro() {
     setErrors((prev) => (prev[field] ? { ...prev, [field]: '' } : prev));
   };
 
+  //Esto es para evitar el scroll accidental NO TOCAR
   const scrollToBottom = () => {
-    setTimeout(() => scrollRef.current?.scrollToEnd({ animated: true }), 100);
+    setTimeout(() => scrollRef.current?.scrollToEnd({ animated: true }), 150);
   };
 
   const toggleGusto = (slug) => {
@@ -70,6 +90,66 @@ export default function Registro() {
     );
     if (errors.gustos) clearError('gustos');
   };
+
+  //Validación de unicidad contra Firestore
+
+  const checkFullNameAvailability = useCallback(async () => {
+    const value = fullName.trim();
+    if (!value) {
+      setFullNameStatus('idle');
+      return;
+    }
+    setFullNameStatus('checking');
+    try {
+      const q = query(
+        collection(db, 'Users'),
+        where('nombreLower', '==', value.toLowerCase()),
+        limit(1)
+      );
+      const snap = await getDocs(q);
+      if (!snap.empty) {
+        setFullNameStatus('taken');
+        setErrors((prev) => ({ ...prev, fullName: 'Ese nombre completo ya está registrado.' }));
+      } else {
+        setFullNameStatus('available');
+      }
+    } catch (e) {
+      console.warn('Error verificando nombre completo:', e);
+      setFullNameStatus('idle');
+    }
+  }, [fullName]);
+
+  const checkUsernameAvailability = useCallback(async () => {
+    const value = username.trim();
+    if (!value || !isValidUsername(value)) {
+      setUsernameStatus('idle');
+      return;
+    }
+    setUsernameStatus('checking');
+    try {
+      const q = query(
+        collection(db, 'Users'),
+        where('nombreUsuarioLower', '==', value.toLowerCase()),
+        limit(1)
+      );
+      const snap = await getDocs(q);
+      if (!snap.empty) {
+        setUsernameStatus('taken');
+        setErrors((prev) => ({ ...prev, username: 'Ese nombre de usuario ya está en uso.' }));
+      } else {
+        setUsernameStatus('available');
+      }
+    } catch (e) {
+      console.warn('Error verificando nombre de usuario:', e);
+      setUsernameStatus('idle');
+    }
+  }, [username]);
+
+  const passwordChecks = PASSWORD_RULES.map((rule) => ({
+    ...rule,
+    passed: rule.test(password),
+  }));
+  const passwordIsStrong = passwordChecks.every((r) => r.passed);
 
   const validate = () => {
     const next = {
@@ -85,6 +165,9 @@ export default function Registro() {
     if (!fullName.trim()) {
       next.fullName = 'Ingresa tu nombre completo';
       ok = false;
+    } else if (fullNameStatus === 'taken') {
+      next.fullName = 'Ese nombre completo ya está registrado.';
+      ok = false;
     }
 
     if (!username.trim()) {
@@ -92,6 +175,9 @@ export default function Registro() {
       ok = false;
     } else if (!isValidUsername(username)) {
       next.username = 'Usa 3-20 caracteres: letras, números, "_" o "."';
+      ok = false;
+    } else if (usernameStatus === 'taken') {
+      next.username = 'Ese nombre de usuario ya está en uso.';
       ok = false;
     }
 
@@ -102,13 +188,15 @@ export default function Registro() {
       next.email = 'Ingresa un correo válido';
       ok = false;
     }
+
     if (!password) {
       next.password = 'Ingresa una contraseña';
       ok = false;
-    } else if (password.length < 6) {
-      next.password = 'Debe tener al menos 6 caracteres';
+    } else if (!passwordIsStrong) {
+      next.password = 'Tu contraseña no cumple todos los requisitos de seguridad.';
       ok = false;
     }
+
     if (!confirmPassword) {
       next.confirmPassword = 'Confirma tu contraseña';
       ok = false;
@@ -128,16 +216,55 @@ export default function Registro() {
 
   const handleRegister = async () => {
     if (!validate() || submitting) return;
+
     setSubmitting(true);
     try {
+      // Segunda verificación justo antes de crear la cuenta, para evitar
+      // que dos personas registren el mismo nombre/usuario casi al mismo
+      // tiempo (condición de carrera entre el último chequeo y el envío).
+      const fullNameLower = fullName.trim().toLowerCase();
+      const usernameLower = username.trim().toLowerCase();
+
+      const [fullNameSnap, usernameSnap] = await Promise.all([
+        getDocs(query(collection(db, 'Users'), where('nombreLower', '==', fullNameLower), limit(1))),
+        getDocs(query(collection(db, 'Users'), where('nombreUsuarioLower', '==', usernameLower), limit(1))),
+      ]);
+
+      if (!fullNameSnap.empty) {
+        setFullNameStatus('taken');
+        setErrors((prev) => ({ ...prev, fullName: 'Ese nombre completo ya está registrado.' }));
+        Alert.alert('Nombre en uso', 'Ese nombre completo ya está registrado. Usa uno diferente.');
+        setSubmitting(false);
+        scrollToBottom();
+        return;
+      }
+      if (!usernameSnap.empty) {
+        setUsernameStatus('taken');
+        setErrors((prev) => ({ ...prev, username: 'Ese nombre de usuario ya está en uso.' }));
+        Alert.alert('Usuario en uso', 'Ese nombre de usuario ya está en uso. Elige otro.');
+        setSubmitting(false);
+        scrollToBottom();
+        return;
+      }
+
       const cred = await createUserWithEmailAndPassword(auth, email.trim(), password);
 
-      // Firebase Auth solo admite displayName y photoURL de forma nativa.
-      // El nombre de usuario se guarda aquí y es lo que se mostrará en el header.
       await updateProfile(cred.user, { displayName: username.trim() });
 
-      // Firebase Auth no guarda directamente datos adicionales como gustos o tipo de usuario
-      // por lo que deben almacenarse en Firestore asociados al `uid` del usuario, colocar mas adelante
+      // Datos adicionales se guardan en Firestore, en Users/{uid}. Se
+      // agregan nombreLower / nombreUsuarioLower para poder validar
+      // unicidad sin distinguir mayúsculas/minúsculas.
+      await setDoc(doc(db, 'Users', cred.user.uid), {
+        nombre: fullName.trim(),
+        nombreLower: fullNameLower,
+        nombreUsuario: username.trim(),
+        nombreUsuarioLower: usernameLower,
+        email: email.trim(),
+        intereses: selectedGustos,
+        departamentoPreferido: null,
+        fotoPerfilURL: null,
+        fechaRegistro: serverTimestamp(),
+      });
 
       if (userType === 'anfitrion') {
         // cuando esté lista la pantalla de anfitrión, se podra navegar allí
@@ -166,6 +293,20 @@ export default function Registro() {
 
   const goToLogin = () => {
     router.push('/screens/Welcome');
+  };
+
+  // Ícono + color según el estado de disponibilidad
+  const renderAvailabilityBadge = (status) => {
+    if (status === 'checking') {
+      return <ActivityIndicator size="small" color={COLOR_TEAL} />;
+    }
+    if (status === 'available') {
+      return <MaterialCommunityIcons name="check-circle" size={18} color={COLOR_TEAL} />;
+    }
+    if (status === 'taken') {
+      return <MaterialCommunityIcons name="close-circle" size={18} color={COLOR_DANGER} />;
+    }
+    return null;
   };
 
   return (
@@ -198,36 +339,57 @@ export default function Registro() {
           showsVerticalScrollIndicator={false}
         >
           <View style={styles.card}>
+            {/* Nombre completo */}
             <Text style={styles.fieldLabel}>Nombre completo</Text>
             <View style={[styles.inputRow, errors.fullName ? styles.inputRowError : null]}>
               <MaterialCommunityIcons name="account-outline" size={18} color={COLOR_TEXT_MUTED} style={styles.inputIcon} />
               <TextInput
                 style={styles.input}
                 value={fullName}
-                onChangeText={(t) => { setFullName(t); clearError('fullName'); }}
+                onChangeText={(t) => {
+                  setFullName(t);
+                  clearError('fullName');
+                  setFullNameStatus('idle');
+                }}
+                onBlur={checkFullNameAvailability}
                 placeholder="Tu nombre y apellido"
                 placeholderTextColor="#a7b0b4"
                 autoCapitalize="words"
-                onFocus={scrollToBottom}
               />
+              {renderAvailabilityBadge(fullNameStatus)}
             </View>
-            {!!errors.fullName && <Text style={styles.errorText}>{errors.fullName}</Text>}
+            {!!errors.fullName ? (
+              <Text style={styles.errorText}>{errors.fullName}</Text>
+            ) : fullNameStatus === 'available' ? (
+              <Text style={styles.successText}>Este nombre está disponible.</Text>
+            ) : null}
 
+            {/* Nombre de usuario: mismo criterio */}
             <Text style={[styles.fieldLabel, styles.fieldSpacing]}>Nombre de usuario</Text>
             <View style={[styles.inputRow, errors.username ? styles.inputRowError : null]}>
               <MaterialCommunityIcons name="at" size={18} color={COLOR_TEXT_MUTED} style={styles.inputIcon} />
               <TextInput
                 style={styles.input}
                 value={username}
-                onChangeText={(t) => { setUsername(t); clearError('username'); }}
+                onChangeText={(t) => {
+                  setUsername(t);
+                  clearError('username');
+                  setUsernameStatus('idle');
+                }}
+                onBlur={checkUsernameAvailability}
                 placeholder="Así te verán en la app"
                 placeholderTextColor="#a7b0b4"
                 autoCapitalize="none"
-                onFocus={scrollToBottom}
               />
+              {renderAvailabilityBadge(usernameStatus)}
             </View>
-            {!!errors.username && <Text style={styles.errorText}>{errors.username}</Text>}
+            {!!errors.username ? (
+              <Text style={styles.errorText}>{errors.username}</Text>
+            ) : usernameStatus === 'available' ? (
+              <Text style={styles.successText}>Nombre de usuario disponible.</Text>
+            ) : null}
 
+            {/* Correo: mismo criterio */}
             <Text style={[styles.fieldLabel, styles.fieldSpacing]}>Correo electrónico</Text>
             <View style={[styles.inputRow, errors.email ? styles.inputRowError : null]}>
               <MaterialCommunityIcons name="email-outline" size={18} color={COLOR_TEXT_MUTED} style={styles.inputIcon} />
@@ -239,11 +401,11 @@ export default function Registro() {
                 placeholderTextColor="#a7b0b4"
                 keyboardType="email-address"
                 autoCapitalize="none"
-                onFocus={scrollToBottom}
               />
             </View>
             {!!errors.email && <Text style={styles.errorText}>{errors.email}</Text>}
 
+            {/* Contraseña */}
             <Text style={[styles.fieldLabel, styles.fieldSpacing]}>Contraseña</Text>
             <View style={[styles.inputRow, errors.password ? styles.inputRowError : null]}>
               <MaterialCommunityIcons name="lock-outline" size={18} color={COLOR_TEXT_MUTED} style={styles.inputIcon} />
@@ -251,10 +413,10 @@ export default function Registro() {
                 style={styles.input}
                 value={password}
                 onChangeText={(t) => { setPassword(t); clearError('password'); }}
-                placeholder="Mínimo 6 caracteres"
+                placeholder="Crea una contraseña segura"
                 placeholderTextColor="#a7b0b4"
                 secureTextEntry={!showPassword}
-                onFocus={scrollToBottom}
+                onFocus={() => { setShowPasswordRules(true); scrollToBottom(); }}
               />
               <TouchableOpacity onPress={() => setShowPassword((v) => !v)} hitSlop={8}>
                 <MaterialCommunityIcons
@@ -266,6 +428,30 @@ export default function Registro() {
             </View>
             {!!errors.password && <Text style={styles.errorText}>{errors.password}</Text>}
 
+            {/* Checklist de requisitos de contraseña */}
+            {(showPasswordRules || password.length > 0) && (
+              <View style={styles.passwordRulesBox}>
+                {passwordChecks.map((rule) => (
+                  <View key={rule.key} style={styles.passwordRuleRow}>
+                    <MaterialCommunityIcons
+                      name={rule.passed ? 'check-circle' : 'circle-outline'}
+                      size={16}
+                      color={rule.passed ? COLOR_TEAL : COLOR_TEXT_MUTED}
+                    />
+                    <Text
+                      style={[
+                        styles.passwordRuleText,
+                        rule.passed && styles.passwordRuleTextPassed,
+                      ]}
+                    >
+                      {rule.label}
+                    </Text>
+                  </View>
+                ))}
+              </View>
+            )}
+
+            {/* Confirmar contraseña: */}
             <Text style={[styles.fieldLabel, styles.fieldSpacing]}>Confirmar contraseña</Text>
             <View style={[styles.inputRow, errors.confirmPassword ? styles.inputRowError : null]}>
               <MaterialCommunityIcons name="lock-check-outline" size={18} color={COLOR_TEXT_MUTED} style={styles.inputIcon} />
@@ -513,6 +699,39 @@ const styles = StyleSheet.create({
     fontSize: 12,
     marginTop: 4,
     fontFamily: 'Montserrat-Regular',
+  },
+  successText: {
+    color: COLOR_TEAL,
+    fontSize: 12,
+    marginTop: 4,
+    fontFamily: 'Montserrat-Regular',
+  },
+
+  // Checklist de requisitos de contraseña
+  passwordRulesBox: {
+    backgroundColor: '#fafdfd',
+    borderWidth: 1,
+    borderColor: COLOR_TEAL_SOFT,
+    borderRadius: 10,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    marginTop: 8,
+  },
+  passwordRuleRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 4,
+  },
+  passwordRuleText: {
+    marginLeft: 8,
+    fontSize: 12.5,
+    color: COLOR_TEXT_MUTED,
+    fontFamily: 'Montserrat-Regular',
+  },
+  passwordRuleTextPassed: {
+    color: COLOR_TEAL,
+    fontFamily: 'Montserrat-SemiBold',
+    textDecorationLine: 'line-through',
   },
 
   // Gustos

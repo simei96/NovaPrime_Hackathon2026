@@ -125,10 +125,19 @@ export default function Home() {
   const PEEK_CARD_WIDTH = Math.round(windowWidth * 0.72);
   const PEEK_CARD_GAP = 14;
 
-  // Nombre a mostrar en el header: usuario registrado o invitación a iniciar sesión
+  // Nombre a mostrar en el header
   const headerDisplayName = user
     ? user.displayName || (user.email ? user.email.split("@")[0] : "Usuario")
     : "Inicia sesión";
+
+  // Navegacion del perfil
+  function goToProfileOrLogin() {
+    if (user) {
+      router.push("/screens/home/Perfil");
+    } else {
+      router.push("/login");
+    }
+  }
 
   return (
     <View style={{ flex: 1 }}>
@@ -150,25 +159,36 @@ export default function Home() {
           </View>
         ) : (
           <View style={styles.headerRow}>
-            {/* usuario registrado / inicia sesión */}
+            {/* Botón de usuario */}
             <TouchableOpacity
               activeOpacity={0.7}
-              onPress={() => {
-                if (!user) {
-                  router.push("/login");
-                }
-              }}
+              onPress={goToProfileOrLogin}
               style={styles.headerUserWrap}
+              accessibilityRole="button"
+              accessibilityLabel={user ? "Ir a mi perfil" : "Iniciar sesión"}
             >
-              <MaterialCommunityIcons
-                name={user ? "account-circle" : "account-circle-outline"}
-                size={22}
-                color={COLOR_TEAL}
-                style={{ marginRight: 6 }}
-              />
+              {user?.photoURL ? (
+                <Image
+                  source={{ uri: user.photoURL }}
+                  style={styles.headerUserAvatar}
+                />
+              ) : (
+                <MaterialCommunityIcons
+                  name={user ? "account-circle" : "account-circle-outline"}
+                  size={22}
+                  color={COLOR_TEAL}
+                  style={{ marginRight: 6 }}
+                />
+              )}
               <Text numberOfLines={1} style={styles.headerUserText}>
                 {headerDisplayName}
               </Text>
+              <MaterialCommunityIcons
+                name="chevron-right"
+                size={18}
+                color={COLOR_TEAL}
+                style={{ marginLeft: 2 }}
+              />
             </TouchableOpacity>
 
             <View style={{ flex: 1 }} />
@@ -612,7 +632,17 @@ const styles = StyleSheet.create({
   headerUserWrap: {
     flexDirection: "row",
     alignItems: "center",
-    maxWidth: "100%",
+    maxWidth: "70%",
+    paddingVertical: 6,
+    paddingHorizontal: 8,
+    borderRadius: 20,
+    backgroundColor: "#F1FBF9",
+  },
+  headerUserAvatar: {
+    width: 22,
+    height: 22,
+    borderRadius: 11,
+    marginRight: 6,
   },
   headerUserText: {
     fontSize: 20,
