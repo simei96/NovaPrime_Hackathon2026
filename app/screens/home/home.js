@@ -14,13 +14,16 @@ const COLOR_ORANGE = "#D96E32";
 const COLOR_OLIVE = "#8FB32E";
 
 // Category Filter Bar
+// NOTA: se usan las rutas reales que ya existen en el home anterior
+// (aunque el label no coincida textualmente con la ruta), para que
+// la navegación funcione de inmediato.
 const CATEGORIAS = [
-  { label: "Artesanias", icon: "palette", color: "#fff", slug: "artesania" },
-  { label: "Gastronomia", icon: "food", color: "#fff", slug: "gastronomia" },
-  { label: "Naturaleza", icon: "leaf", color: "#fff", slug: "naturalez" },
-  { label: "Tradiciones", icon: "account-group", color: "#fff", slug: "tradiciones" },
-  { label: "Danza y Musica", icon: "music", color: "#fff", slug: "danza y musica" },
-  { label: "Historia", icon: "book", color: "#fff", slug: "historia" },
+  { label: "Artesanias", icon: "palette", color: "#fff", route: "/services/crafts" },
+  { label: "Gastronomia", icon: "food", color: "#fff", route: "/services/restaurants" },
+  { label: "Naturaleza", icon: "leaf", color: "#fff", route: "/experiences/cascadas" },
+  { label: "Tradiciones", icon: "account-group", color: "#fff", route: "/experiences/volcanes" },
+  { label: "Danza y Musica", icon: "music", color: "#fff", route: "/experiences/rios" },
+  { label: "Historia", icon: "book", color: "#fff", route: "/experiences/playas" },
 ];
 
 // Eventos del itinerario del día (Timeline Event Card).
@@ -459,20 +462,16 @@ export default function Home() {
             contentContainerStyle={styles.categoryFilterRow}
           >
             {CATEGORIAS.map((cat, idx) => {
-              const active = selectedCategory === `${cat.slug}-${idx}`;
+              const active = selectedCategory === `${cat.route}-${idx}`;
               return (
                 <TouchableOpacity
-                  key={`${cat.slug}-${idx}`}
+                  key={`${cat.route}-${idx}`}
                   style={styles.categoryItem}
                   activeOpacity={0.85}
                   accessibilityLabel={`Ir a ${cat.label}`}
                   onPress={() => {
-                    setSelectedCategory(`${cat.slug}-${idx}`);
-                    try {
-                      router.push({ pathname: `/experiences/${cat.slug}` });
-                    } catch (e) {
-                      router.push(`/experiences/${cat.slug}`);
-                    }
+                    setSelectedCategory(`${cat.route}-${idx}`);
+                    router.push(cat.route);
                   }}
                 >
                   <View
