@@ -14,16 +14,13 @@ const COLOR_ORANGE = "#D96E32";
 const COLOR_OLIVE = "#8FB32E";
 
 // Category Filter Bar
-// NOTA: se usan las rutas reales que ya existen en el home anterior
-// (aunque el label no coincida textualmente con la ruta), para que
-// la navegación funcione de inmediato.
 const CATEGORIAS = [
   { label: "Artesanias", icon: "palette", color: "#fff", route: "/services/crafts" },
   { label: "Gastronomia", icon: "food", color: "#fff", route: "/services/restaurants" },
-  { label: "Naturaleza", icon: "leaf", color: "#fff", route: "/experiences/cascadas" },
-  { label: "Tradiciones", icon: "account-group", color: "#fff", route: "/experiences/volcanes" },
-  { label: "Danza y Musica", icon: "music", color: "#fff", route: "/experiences/rios" },
-  { label: "Historia", icon: "book", color: "#fff", route: "/experiences/playas" },
+  { label: "Naturaleza", icon: "leaf", color: "#fff", route: "/services/naturaleza" },
+  { label: "Tradiciones", icon: "account-group", color: "#fff", route: "/services/tradiciones" },
+  { label: "Danza y Musica", icon: "music", color: "#fff", route: "/services/danzamusica" },
+  { label: "Historia", icon: "book", color: "#fff", route: "/services/historia" },
 ];
 
 // Eventos del itinerario del día (Timeline Event Card).
@@ -50,6 +47,7 @@ const TIMELINE_EVENTS = [
 export default function Home() {
   const router = useRouter();
   const [user, setUser] = useState(auth.currentUser || null);
+  const [username, setUsername] = useState(null); // nombreUsuario desde Firestore (Users/{uid})
   const [logoURL, setLogoURL] = useState(null);
   const [logoHeaderId, setLogoHeaderId] = useState(null);
   const [promoTour, setPromoTour] = useState(null);
@@ -108,7 +106,26 @@ export default function Home() {
   }, []);
 
   useEffect(() => {
-    const unsub = onAuthStateChanged(auth, (u) => setUser(u));
+    // Escucha el estado de sesión y busca el nombreUsuario en Users/{uid}
+    const unsub = onAuthStateChanged(auth, async (u) => {
+      setUser(u);
+      if (u) {
+        try {
+          const userRef = doc(db, "Users", u.uid);
+          const userSnap = await getDoc(userRef);
+          if (userSnap.exists()) {
+            setUsername(userSnap.data().nombreUsuario || null);
+          } else {
+            setUsername(null);
+          }
+        } catch (error) {
+          console.error("Error loading username:", error);
+          setUsername(null);
+        }
+      } else {
+        setUsername(null);
+      }
+    });
     return () => unsub && unsub();
   }, []);
 
@@ -128,9 +145,9 @@ export default function Home() {
   const PEEK_CARD_WIDTH = Math.round(windowWidth * 0.72);
   const PEEK_CARD_GAP = 14;
 
-  // Nombre a mostrar en el header
+  // Nombre a mostrar en el header: prioriza nombreUsuario, luego correo, luego "Usuario"
   const headerDisplayName = user
-    ? user.displayName || (user.email ? user.email.split("@")[0] : "Usuario")
+    ? username || (user.email ? user.email.split("@")[0] : "Usuario")
     : "Inicia sesión";
 
   // Navegacion del perfil
@@ -562,7 +579,7 @@ export default function Home() {
                   <Text style={styles.cultureBtnPrimaryText}>
                     Comenzar experiencia
                   </Text>
-                  <MaterialCommunityIcons
+                  <MaterialCommunityIcons  
                     name="play"
                     size={14}
                     color="#fff"
@@ -631,10 +648,10 @@ const styles = StyleSheet.create({
   headerUserWrap: {
     flexDirection: "row",
     alignItems: "center",
-    maxWidth: "70%",
+    maxWidth: "60%",
     paddingVertical: 6,
     paddingHorizontal: 8,
-    borderRadius: 20,
+    borderRadius: 10,
     backgroundColor: "#F1FBF9",
   },
   headerUserAvatar: {
@@ -644,8 +661,8 @@ const styles = StyleSheet.create({
     marginRight: 6,
   },
   headerUserText: {
-    fontSize: 20,
-    fontWeight: "700",
+    fontSize: 15,
+    fontWeight: "600",
     color: "#0000",
     fontFamily: "Montserrat-Regular",
   },

@@ -3,7 +3,7 @@ import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import { signInWithEmailAndPassword } from 'firebase/auth';
-import { collection, onSnapshot, query } from 'firebase/firestore';
+import { collection, getDocs, limit, onSnapshot, query, where } from 'firebase/firestore';
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
   ActivityIndicator, Alert, Animated, Dimensions, Easing, Image,
@@ -41,8 +41,9 @@ const COLOR_ORANGE_SOFT = 'rgba(217,110,50,0.16)';
 const COLOR_TEXT_DARK = '#222';
 const COLOR_TEXT_MUTED = '#7A8489';
 
-// función que verifica que el correo tenga el formato correcto.
-const isValidEmail = (value) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value.trim());
+// El nombre de usuario acepta el mismo formato que en Registro.js:
+// letras, números, "_" y "." — no se valida como correo.
+const isValidUsername = (value) => /^[a-zA-Z0-9_.]{3,20}$/.test(value.trim());
 
 const mapDocToSlide = (doc) => {
   const data = doc.data() || {};
@@ -82,10 +83,11 @@ export default function WelcomeScreen() {
   const [index, setIndex] = useState(0);
   const [nextIndex, setNextIndex] = useState(null);
   const [loadingHero, setLoadingHero] = useState(true);
-  const [email, setEmail] = useState('');
+  // Cambiado de "email" a "username" — es lo que el usuario escribe ahora.
+  const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
-  const [emailError, setEmailError] = useState('');
+  const [usernameError, setUsernameError] = useState('');
   const [passwordError, setPasswordError] = useState('');
   const [submitting, setSubmitting] = useState(false);
 
@@ -210,16 +212,17 @@ export default function WelcomeScreen() {
       if (autoplayTimer.current) clearInterval(autoplayTimer.current);
     };
   }, [loadingHero, slides.length, advance]);
+
   const validate = () => {
     let ok = true;
-    if (!email.trim()) {
-      setEmailError('Ingresa tu correo electrónico');
+    if (!username.trim()) {
+      setUsernameError('Ingresa tu nombre de usuario');
       ok = false;
-    } else if (!isValidEmail(email)) {
-      setEmailError('Ingresa un correo válido');
+    } else if (!isValidUsername(username)) {
+      setUsernameError('Ingresa un nombre de usuario válido');
       ok = false;
     } else {
-      setEmailError('');
+      setUsernameError('');
     }
 
     if (!password) {
@@ -235,16 +238,46 @@ export default function WelcomeScreen() {
     if (!validate() || submitting) return;
     setSubmitting(true);
     try {
-      await signInWithEmailAndPassword(auth, email.trim(), password);
+      // Firebase Auth solo permite iniciar sesión con correo, así que
+      // primero buscamos en Firestore qué correo corresponde al nombre de
+      // usuario ingresado, usando el mismo campo "nombreUsuarioLower" que
+      // se guarda al registrarse (ver Registro.js).
+      const usernameLower = username.trim().toLowerCase();
+      const q = query(
+        collection(db, 'Users'),
+        where('nombreUsuarioLower', '==', usernameLower),
+        limit(1)
+      );
+      const snap = await getDocs(q);
+
+      if (snap.empty) {
+        setUsernameError('No encontramos una cuenta con ese usuario.');
+        Alert.alert('Usuario no registrado', 'No encontramos una cuenta con ese nombre de usuario. Por favor regístrate.');
+        setSubmitting(false);
+        return;
+      }
+
+      const userData = snap.docs[0].data();
+      const emailForLogin = userData.email;
+
+      if (!emailForLogin) {
+        Alert.alert('Error', 'No se pudo recuperar la información de esta cuenta. Contacta a soporte.');
+        setSubmitting(false);
+        return;
+      }
+
+      await signInWithEmailAndPassword(auth, emailForLogin, password);
       router.replace('/(tabs)');
     } catch (error) {
       const code = error?.code || '';
       if (code === 'auth/user-not-found') {
-        Alert.alert('Usuario no registrado', 'No encontramos una cuenta con ese correo. Por favor regístrate.');
+        Alert.alert('Usuario no registrado', 'No encontramos una cuenta con ese usuario. Por favor regístrate.');
       } else if (code === 'auth/wrong-password') {
         Alert.alert('Contraseña incorrecta', 'La contraseña ingresada no es correcta.');
       } else if (code === 'auth/invalid-email') {
-        Alert.alert('Correo inválido', 'Revisa que el correo tenga un formato válido.');
+        Alert.alert('Error', 'Hubo un problema con la cuenta asociada a este usuario.');
+      } else if (code === 'auth/too-many-requests') {
+        Alert.alert('Demasiados intentos', 'Espera un momento antes de volver a intentarlo.');
       } else {
         Alert.alert('Error al iniciar sesión', error.message || String(error));
       }
@@ -391,21 +424,21 @@ export default function WelcomeScreen() {
             <Text style={styles.loginTitle}>Bienvenido nuevamente</Text>
             <Text style={styles.loginSubtitle}>Inicia sesión para continuar</Text>
 
-            <Text style={[styles.fieldLabel, { marginTop: 20 }]}>Correo electrónico</Text>
-            <View style={[styles.inputRow, emailError ? styles.inputRowError : null]}>
-              <MaterialCommunityIcons name="email-outline" size={18} color={COLOR_TEXT_MUTED} style={styles.inputIcon} />
+            <Text style={[styles.fieldLabel, { marginTop: 20 }]}>Nombre de usuario</Text>
+            <View style={[styles.inputRow, usernameError ? styles.inputRowError : null]}>
+              <MaterialCommunityIcons name="at" size={18} color={COLOR_TEXT_MUTED} style={styles.inputIcon} />
               <TextInput
                 style={styles.input}
-                value={email}
-                onChangeText={(t) => { setEmail(t); if (emailError) setEmailError(''); }}
-                placeholder="tu@email.com"
+                value={username}
+                onChangeText={(t) => { setUsername(t); if (usernameError) setUsernameError(''); }}
+                placeholder="tu_usuario"
                 placeholderTextColor="#a7b0b4"
-                keyboardType="email-address"
                 autoCapitalize="none"
+                autoCorrect={false}
                 onFocus={scrollToBottom}
               />
             </View>
-            {!!emailError && <Text style={styles.errorText}>{emailError}</Text>}
+            {!!usernameError && <Text style={styles.errorText}>{usernameError}</Text>}
 
             <Text style={[styles.fieldLabel, { marginTop: 12 }]}>Contraseña</Text>
             <View style={[styles.inputRow, passwordError ? styles.inputRowError : null]}>

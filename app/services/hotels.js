@@ -1,2 +1,0 @@
-export const HOTELS_LEGACY_FILE_PLACEHOLDER = true;
-

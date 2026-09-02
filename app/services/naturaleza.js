@@ -3,11 +3,10 @@ import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { Stack, useRouter } from 'expo-router';
 import { collection, onSnapshot } from 'firebase/firestore';
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { FlatList, Image, RefreshControl, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
+import { ActivityIndicator, FlatList, Image, RefreshControl, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
 import { db } from '../../firebaseConfig';
-import { formatCordoba } from '../../utils/format';
 
-//Paleta
+// paleta de colores
 const COLOR_TEAL = '#2EAD9A';
 const COLOR_ORANGE = '#D96E32';
 const COLOR_OLIVE = '#8FB32E';
@@ -18,79 +17,72 @@ const COLOR_TEXT_MUTED = '#607d8b';
 // Category Chips
 const CATEGORIAS_CHIPS = [
 	{ label: 'Todos', icon: 'view-grid-outline' },
-	{ label: 'Tradicional', icon: 'silverware-fork-knife' },
-	{ label: 'Internacional', icon: 'earth' },
-	{ label: 'Mariscos', icon: 'fish' },
-	{ label: 'Café', icon: 'coffee-outline' },
-	{ label: 'Comida Rápida', icon: 'food-fork-drink' },
+	{ label: 'Volcanes', icon: 'image-filter-hdr' },
+	{ label: 'Islas', icon: 'island' },
+	{ label: 'Cañones', icon: 'terrain' },
+	{ label: 'Lagunas', icon: 'water' },
+	{ label: 'Reservas', icon: 'pine-tree' },
 ];
 
 // CTA Card tipo carrusel (ofertas) — estático por ahora
 const OFERTAS = [
 	{
-		id: 'r-off-1',
-		titulo: 'Tour Gastronómico',
-		desc: '3 restaurantes + bebidas + postre',
+		id: 'n-off-1',
+		titulo: 'Tour Volcán + Laguna',
+		desc: 'Cráter Masaya + Laguna de Apoyo en un día',
+		descuento: 15,
+		precioNuevo: 680,
+		precioAnterior: 800,
+		imagen: 'https://images.unsplash.com/photo-1516815231560-8f41ec531527?auto=format&fit=crop&w=900&q=80',
+	},
+	{
+		id: 'n-off-2',
+		titulo: 'Aventura en Somoto',
+		desc: 'Tour en balsa + almuerzo incluido',
 		descuento: 20,
-		precioNuevo: 1480,
-		precioAnterior: 1850,
-		imagen: 'https://images.unsplash.com/photo-1504674900247-0877df9cc836?auto=format&fit=crop&w=900&q=80',
-	},
-	{
-		id: 'r-off-2',
-		titulo: 'Menú Ejecutivo',
-		desc: 'Entrada + plato fuerte + bebida',
-		descuento: 18,
-		precioNuevo: 340,
-		precioAnterior: 415,
-		imagen: 'https://images.unsplash.com/photo-1567620905732-2d1ec7ab7445?auto=format&fit=crop&w=900&q=80',
-	},
-	{
-		id: 'r-off-3',
-		titulo: 'Festival Marisco',
-		desc: 'Buffet degustación premium',
-		descuento: 25,
-		precioNuevo: 1890,
-		precioAnterior: 2520,
-		imagen: 'https://images.unsplash.com/photo-1559847844-5315695dadae?auto=format&fit=crop&w=900&q=80',
+		precioNuevo: 480,
+		precioAnterior: 600,
+		imagen: 'https://images.unsplash.com/photo-1433086966358-54859d0ed716?auto=format&fit=crop&w=900&q=80',
 	},
 ];
 
-function normalizeRest(d) {
+function normalizeLugar(d) {
 	const data = d.data() || {};
 	return {
 		id: d.id,
-		nombre: data.Nombre || 'Restaurante',
-		categoria: data.Categoria || 'Tradicional',
-		rating: typeof data.Rating === 'number' ? data.Rating : null,
-		precioMin: data.PrecioMin || 0,
-		precioMax: data.PrecioMax || 0,
-		ciudad: data.Ubicacion || 'Ciudad',
-		especialidades: Array.isArray(data.Especialidades) ? data.Especialidades : [],
-		horario: data.Horario || '',
-		disponible: !!data.Disponible,
+		nombre: data.Nombre || 'Sin nombre',
+		categoria: data.Categoria || 'Otro',
+		ubicacion: data.Ubicacion || '',
 		imagen: data.ImagenURL || null,
+		rating: typeof data.Rating === 'number' ? data.Rating : 0,
+		precio: typeof data.Precio === 'number' ? data.Precio : null,
+		descripcion: data.Descripcion || '',
+		horario: data.Horario || '',
+		disponible: data.Disponible !== undefined ? !!data.Disponible : true,
+		actividades: Array.isArray(data.Actividades) ? data.Actividades : [],
 	};
 }
 
-export default function RestaurantsListScreen() {
+export default function NaturalezaScreen() {
 	const router = useRouter();
 	const [activeFilter, setActiveFilter] = useState('Todos');
 	const [search, setSearch] = useState('');
 	const [carouselIndex, setCarouselIndex] = useState(0);
-	const [restaurantes, setRestaurantes] = useState([]);
+
+	const [lugares, setLugares] = useState([]);
 	const [loading, setLoading] = useState(true);
 	const [error, setError] = useState(null);
+
 	const [refreshing, setRefreshing] = useState(false);
 	const [favorites, setFavorites] = useState({});
 	const scrollRef = useRef(null);
 
 	useEffect(() => {
-		const colRef = collection(db, 'Restaurantes');
+		const colRef = collection(db, 'Naturaleza');
 		const unsub = onSnapshot(
 			colRef,
 			(snap) => {
-				setRestaurantes(snap.docs.map(normalizeRest));
+				setLugares(snap.docs.map(normalizeLugar));
 				setLoading(false);
 			},
 			(err) => {
@@ -127,26 +119,22 @@ export default function RestaurantsListScreen() {
 		setSearch('');
 	};
 
-	const filtered = restaurantes.filter((r) => {
-		const categoria = typeof r.categoria === 'string' ? r.categoria : '';
-		const nombre = typeof r.nombre === 'string' ? r.nombre : '';
-		return (
-			(activeFilter === 'Todos' || categoria.toLowerCase() === activeFilter.toLowerCase()) &&
-			nombre.toLowerCase().includes(search.toLowerCase())
-		);
-	});
+	const filtrados = lugares.filter((l) => (
+		(activeFilter === 'Todos' || l.categoria === activeFilter) &&
+		l.nombre.toLowerCase().includes(search.toLowerCase())
+	));
 
-	const destacados = restaurantes.slice(0, 5);
+	const destacados = lugares.slice(0, 5);
 	const filtroActivo = activeFilter !== 'Todos' || search.trim().length > 0;
 
-	// Render: Empty State
+	// render empty state
 	const renderEmptyState = () => (
 		<View style={styles.emptyState}>
 			<View style={styles.emptyIconCircle}>
-				<MaterialCommunityIcons name="silverware-variant" size={38} color={COLOR_TEAL} />
+				<MaterialCommunityIcons name="image-filter-hdr" size={38} color={COLOR_TEAL} />
 			</View>
 			<Text style={styles.emptyTitle}>Todavía no hay nada aquí</Text>
-			<Text style={styles.emptySubtitle}>Hay tanto por descubrir de nuestra gastronomía</Text>
+			<Text style={styles.emptySubtitle}>Hay tanto por descubrir de nuestra naturaleza</Text>
 			<TouchableOpacity style={styles.emptyBtn} activeOpacity={0.85} onPress={resetFiltros}>
 				<MaterialCommunityIcons name="magnify" size={16} color="#fff" style={{ marginRight: 6 }} />
 				<Text style={styles.emptyBtnText}>Ir a explorar</Text>
@@ -154,7 +142,6 @@ export default function RestaurantsListScreen() {
 		</View>
 	);
 
-	// Render: tarjeta "Todos los restaurantes"
 	const renderAllCard = (item) => (
 		<View key={item.id} style={styles.allCard}>
 			<View style={styles.allImageWrap}>
@@ -176,19 +163,11 @@ export default function RestaurantsListScreen() {
 						color={favorites[item.id] ? COLOR_ORANGE : '#fff'}
 					/>
 				</TouchableOpacity>
-				{!item.disponible && (
-					<View style={styles.noDispoBadge}>
-						<Text style={styles.noDispoBadgeText}>No disponible</Text>
-					</View>
-				)}
 			</View>
 
 			<View style={styles.allBody}>
 				<Text style={styles.allName} numberOfLines={1}>
 					{item.nombre}
-				</Text>
-				<Text style={styles.allLocation} numberOfLines={1}>
-					{item.ciudad}
 				</Text>
 				<View style={styles.allInfoRow}>
 					<Text style={styles.allCategory} numberOfLines={1}>
@@ -196,18 +175,13 @@ export default function RestaurantsListScreen() {
 					</Text>
 					<View style={styles.allRatingRow}>
 						<MaterialCommunityIcons name="star" size={14} color={COLOR_OLIVE} />
-						<Text style={styles.allRatingText}>
-							{typeof item.rating === 'number' ? item.rating.toFixed(1) : '0'}
-						</Text>
+						<Text style={styles.allRatingText}>{item.rating}</Text>
 					</View>
 				</View>
-				<Text style={styles.allPrice}>
-					{formatCordoba(item.precioMin)} - {formatCordoba(item.precioMax)}
-				</Text>
 				<TouchableOpacity
 					style={styles.allBtn}
 					activeOpacity={0.85}
-					onPress={() => router.push(`/services/restaurants/${item.id}`)}
+					onPress={() => router.push(`/services/naturaleza/${item.id}`)}
 				>
 					<Text style={styles.allBtnText}>Ver detalles</Text>
 				</TouchableOpacity>
@@ -215,90 +189,56 @@ export default function RestaurantsListScreen() {
 		</View>
 	);
 
-	// Render: tarjeta de resultados
-	const renderRest = ({ item }) => (
-		<TouchableOpacity
-			onPress={() => router.push(`/services/restaurants/${item.id}`)}
-			activeOpacity={0.85}
-			style={styles.restCard}
-		>
-			<View style={styles.restTop}>
-				<View style={styles.restTag}>
-					<Text style={styles.restTagText}>{item.categoria}</Text>
-				</View>
-				<View style={styles.restActions}>
-					<TouchableOpacity style={styles.iconBtn} onPress={() => toggleFavorite(item.id)}>
-						<MaterialCommunityIcons
-							name={favorites[item.id] ? 'heart' : 'heart-outline'}
-							size={16}
-							color={favorites[item.id] ? COLOR_ORANGE : COLOR_TEXT_MUTED}
-						/>
-					</TouchableOpacity>
-					<TouchableOpacity style={styles.iconBtn}>
-						<MaterialCommunityIcons name="share-variant" size={16} color={COLOR_TEXT_MUTED} />
-					</TouchableOpacity>
-				</View>
-			</View>
-			<View style={styles.restImageBox}>
+	//Tarjeta de resultados
+	const renderResultCard = ({ item }) => (
+		<View key={item.id} style={styles.resultCard}>
+			<View style={styles.resultImageWrap}>
 				{item.imagen ? (
-					<Image source={{ uri: item.imagen }} style={styles.restImg} />
+					<Image source={{ uri: item.imagen }} style={styles.resultImage} resizeMode="cover" />
 				) : (
-					<MaterialCommunityIcons name="image" size={40} color="#b0bec5" />
-				)}
-				<View style={styles.ratingBadge}>
-					<MaterialCommunityIcons name="star" size={13} color={COLOR_OLIVE} />
-					<Text style={styles.ratingBadgeText}>
-						{typeof item.rating === 'number' ? item.rating.toFixed(1) : 'N/D'}
-					</Text>
-				</View>
-			</View>
-			<View style={styles.restBody}>
-				<View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start' }}>
-					<Text style={styles.restTitle}>{item.nombre}</Text>
-					<Text style={styles.priceRange}>
-						{formatCordoba(item.precioMin)} - {formatCordoba(item.precioMax)}{' '}
-						<Text style={styles.priceRangeUnit}>por persona</Text>
-					</Text>
-				</View>
-				<View style={{ flexDirection: 'row', alignItems: 'center', marginTop: 4 }}>
-					<MaterialCommunityIcons name="map-marker" size={14} color={COLOR_TEXT_MUTED} style={{ marginRight: 4 }} />
-					<Text style={styles.restLoc}>{item.ciudad}</Text>
-				</View>
-				<View style={styles.tagsWrap}>
-					{item.especialidades.slice(0, 4).map((es) =>
-						es && typeof es === 'object' && typeof es.nombre === 'string' ? (
-							<View key={es.nombre} style={styles.specTag}>
-								<Text style={styles.specTagText}>{es.nombre}</Text>
-							</View>
-						) : null
-					)}
-				</View>
-				<View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginTop: 6 }}>
-					<View style={{ flexDirection: 'row', alignItems: 'center' }}>
-						<MaterialCommunityIcons name="clock-outline" size={14} color={COLOR_TEXT_MUTED} style={{ marginRight: 4 }} />
-						<Text style={styles.restSchedule}>{item.horario}</Text>
+					<View style={[styles.resultImage, styles.resultImagePlaceholder]}>
+						<MaterialCommunityIcons name="image-outline" size={22} color="#c7d0d6" />
 					</View>
-					<Text style={[styles.disponible, { color: item.disponible ? COLOR_TEAL : COLOR_ORANGE }]}>
-						{item.disponible ? 'Mesa disponible' : 'No disponible'}
+				)}
+				<TouchableOpacity
+					style={styles.favBtn}
+					activeOpacity={0.8}
+					onPress={() => toggleFavorite(item.id)}
+				>
+					<MaterialCommunityIcons
+						name={favorites[item.id] ? 'heart' : 'heart-outline'}
+						size={16}
+						color={favorites[item.id] ? COLOR_ORANGE : '#fff'}
+					/>
+				</TouchableOpacity>
+			</View>
+
+			<View style={styles.resultBody}>
+				<Text style={styles.resultName} numberOfLines={1}>
+					{item.nombre}
+				</Text>
+				<View style={styles.resultInfoRow}>
+					<Text style={styles.resultType} numberOfLines={1}>
+						{item.ubicacion || 'Sin ubicación'}
+					</Text>
+					<Text style={styles.resultPrice} numberOfLines={1}>
+						{item.precio != null && item.precio > 0 ? `C$ ${item.precio}` : 'Entrada libre'}
 					</Text>
 				</View>
-				<View style={styles.actionsRow}>
-					<TouchableOpacity style={styles.outlineBtn}>
-						<MaterialCommunityIcons name="phone" size={16} color={COLOR_TEAL} />
-						<Text style={styles.outlineBtnText}>Llamar</Text>
-					</TouchableOpacity>
-					<TouchableOpacity style={styles.primaryBtn}>
-						<MaterialCommunityIcons name="silverware-fork-knife" size={16} color="#fff" style={{ marginRight: 6 }} />
-						<Text style={styles.primaryBtnText}>Reservar Mesa</Text>
-					</TouchableOpacity>
-				</View>
+				<TouchableOpacity
+					style={styles.resultBtn}
+					activeOpacity={0.85}
+					onPress={() => router.push(`/services/naturaleza/${item.id}`)}
+				>
+					<Text style={styles.resultBtnText}>Ver detalles</Text>
+				</TouchableOpacity>
 			</View>
-		</TouchableOpacity>
+		</View>
 	);
 
 	return (
 		<View style={{ flex: 1, backgroundColor: '#f6fafd' }}>
-			<Stack.Screen options={{ title: 'Restaurantes', headerTitleAlign: 'center' }} />
+			<Stack.Screen options={{ title: 'Naturaleza', headerTitleAlign: 'center' }} />
 			<ScrollView
 				contentContainerStyle={{ paddingBottom: 40 }}
 				showsVerticalScrollIndicator={false}
@@ -309,20 +249,20 @@ export default function RestaurantsListScreen() {
 					<View style={styles.decoCircleTop} />
 					<View style={styles.decoCircleBottom} />
 					<MaterialCommunityIcons
-						name="silverware-fork-knife"
+						name="image-filter-hdr"
 						size={70}
 						color="rgba(255,255,255,0.08)"
 						style={styles.decoIcon}
 					/>
 
-					<Text style={styles.heroTitle}>Restaurantes</Text>
-					<Text style={styles.heroSubtitle}>Descubre los mejores lugares para comer · Precios en córdobas</Text>
+					<Text style={styles.heroTitle}>Naturaleza</Text>
+					<Text style={styles.heroSubtitle}>Volcanes, islas y reservas · Precios en córdobas</Text>
 
 					<View style={styles.searchRow}>
 						<View style={styles.searchBox}>
 							<TextInput
 								style={styles.searchInput}
-								placeholder="Buscar restaurante..."
+								placeholder="Buscar lugares..."
 								placeholderTextColor="rgba(255,255,255,0.65)"
 								value={search}
 								onChangeText={setSearch}
@@ -336,7 +276,7 @@ export default function RestaurantsListScreen() {
 
 				{/* Categories Section */}
 				<View style={styles.filtrosWrap}>
-					<Text style={styles.filtrosTitle}>Categoría</Text>
+					<Text style={styles.filtrosTitle}>Categorías</Text>
 					<ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.filtrosRow}>
 						{CATEGORIAS_CHIPS.map((cat) => {
 							const active = activeFilter === cat.label;
@@ -363,7 +303,8 @@ export default function RestaurantsListScreen() {
 				{/* Estado de carga */}
 				{loading && (
 					<View style={styles.loadingRow}>
-						<Text style={styles.loadingText}>Cargando restaurantes...</Text>
+						<ActivityIndicator size="small" color={COLOR_TEAL} />
+						<Text style={styles.loadingText}>Cargando lugares...</Text>
 					</View>
 				)}
 
@@ -406,8 +347,8 @@ export default function RestaurantsListScreen() {
 											<Text style={styles.offerTitle}>{o.titulo}</Text>
 											<Text style={styles.offerDesc} numberOfLines={2}>{o.desc}</Text>
 											<View style={{ flexDirection: 'row', alignItems: 'flex-end', marginTop: 6 }}>
-												<Text style={styles.ofertaPrecioNuevo}>{formatCordoba(o.precioNuevo)}</Text>
-												<Text style={styles.ofertaPrecioAnterior}>{formatCordoba(o.precioAnterior)}</Text>
+												<Text style={styles.ofertaPrecioNuevo}>C$ {o.precioNuevo}</Text>
+												<Text style={styles.ofertaPrecioAnterior}>C$ {o.precioAnterior}</Text>
 											</View>
 											<TouchableOpacity style={styles.offerBtn} activeOpacity={0.85}>
 												<Text style={styles.offerBtnText}>Aprovechar</Text>
@@ -423,7 +364,7 @@ export default function RestaurantsListScreen() {
 							</View>
 						</View>
 
-						{/* Peek / Snap Carousel (Destacados) */}
+						{/* Peek / Snap Carousel (Destacados) — datos reales de Firestore */}
 						<View style={{ marginTop: 26 }}>
 							<View style={styles.sectionHeaderRow}>
 								<MaterialCommunityIcons name="star-outline" size={18} color={COLOR_TEAL} style={{ marginRight: 6 }} />
@@ -431,7 +372,7 @@ export default function RestaurantsListScreen() {
 							</View>
 							{destacados.length === 0 ? (
 								<Text style={[styles.loadingText, { paddingHorizontal: 16 }]}>
-									Aún no hay restaurantes registrados.
+									Aún no hay lugares registrados.
 								</Text>
 							) : (
 								<ScrollView
@@ -465,13 +406,17 @@ export default function RestaurantsListScreen() {
 												</TouchableOpacity>
 											</View>
 											<Text style={styles.peekName} numberOfLines={1}>{d.nombre}</Text>
-											<Text style={styles.peekInfo} numberOfLines={1}>{d.ciudad}</Text>
+											<Text style={styles.peekInfo} numberOfLines={1}>
+												{d.ubicacion}{d.horario ? ` • ${d.horario}` : ''}
+											</Text>
 											<View style={styles.peekFooterRow}>
-												<Text style={styles.peekPrice}>{formatCordoba(d.precioMin)}+</Text>
+												<Text style={styles.peekPrice}>
+													{d.precio != null && d.precio > 0 ? `C$ ${d.precio}` : 'Entrada libre'}
+												</Text>
 												<TouchableOpacity
 													style={styles.peekBtn}
 													activeOpacity={0.85}
-													onPress={() => router.push(`/services/restaurants/${d.id}`)}
+													onPress={() => router.push(`/services/naturaleza/${d.id}`)}
 												>
 													<Text style={styles.peekBtnText}>Ver más</Text>
 												</TouchableOpacity>
@@ -482,18 +427,18 @@ export default function RestaurantsListScreen() {
 							)}
 						</View>
 
-						{/* Todos los restaurantes */}
+						{/* Todos los lugares — grid con todos los documentos de Firestore */}
 						<View style={{ marginTop: 26, paddingHorizontal: 16 }}>
 							<View style={[styles.sectionHeaderRow, { paddingHorizontal: 0 }]}>
 								<MaterialCommunityIcons name="view-grid-outline" size={18} color={COLOR_TEAL} style={{ marginRight: 6 }} />
-								<Text style={styles.sectionTitle}>Todos los restaurantes</Text>
+								<Text style={styles.sectionTitle}>Todos los lugares</Text>
 							</View>
 
-							{restaurantes.length === 0 ? (
+							{lugares.length === 0 ? (
 								renderEmptyState()
 							) : (
 								<View style={styles.allGrid}>
-									{restaurantes.map((item) => renderAllCard(item))}
+									{lugares.map((item) => renderAllCard(item))}
 								</View>
 							)}
 						</View>
@@ -503,16 +448,21 @@ export default function RestaurantsListScreen() {
 				{/* Results Listing Component */}
 				{!loading && !error && filtroActivo && (
 					<View style={{ marginTop: 22, paddingHorizontal: 16 }}>
-						<Text style={styles.sectionTitle}>Resultados ({filtered.length})</Text>
-						<FlatList
-							data={filtered}
-							keyExtractor={(item) => item.id}
-							renderItem={renderRest}
-							scrollEnabled={false}
-							ItemSeparatorComponent={() => <View style={{ height: 16 }} />}
-							contentContainerStyle={{ marginTop: 12 }}
-							ListEmptyComponent={renderEmptyState}
-						/>
+						<Text style={styles.sectionTitle}>Resultados ({filtrados.length})</Text>
+						{filtrados.length === 0 ? (
+							renderEmptyState()
+						) : (
+							<FlatList
+								data={filtrados}
+								keyExtractor={(item) => item.id}
+								renderItem={renderResultCard}
+								numColumns={2}
+								scrollEnabled={false}
+								columnWrapperStyle={{ justifyContent: 'space-between' }}
+								contentContainerStyle={{ marginTop: 12 }}
+								ItemSeparatorComponent={() => <View style={{ height: 14 }} />}
+							/>
+						)}
 					</View>
 				)}
 			</ScrollView>
@@ -630,7 +580,7 @@ const styles = StyleSheet.create({
 	sectionTitle: { fontSize: 15, fontFamily: 'Montserrat-SemiBold', color: COLOR_TEXT_DARK },
 	sectionHeaderRow: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 16, marginBottom: 10 },
 
-	// CTA Card carrusel 
+	// CTA Card carrusel (ofertas) — imagen + overlay
 	offerCard: {
 		width: 300,
 		height: 190,
@@ -717,8 +667,8 @@ const styles = StyleSheet.create({
 	dotActive: { backgroundColor: COLOR_TEAL, opacity: 1, width: 16 },
 
 	// Peek / Snap Carousel (destacados)
-	peekCard: { width: 200, backgroundColor: '#fff', borderRadius: 16, padding: 10, borderWidth: 1, borderColor: COLOR_ORANGE },
-	peekImageWrap: { width: '100%', height: 110, borderRadius: 12, overflow: 'hidden', backgroundColor: '#eceff1', position: 'relative' },
+	peekCard: { width: 240, backgroundColor: '#fff', borderRadius: 16, padding: 10, borderWidth: 1, borderColor: COLOR_ORANGE },
+	peekImageWrap: { width: '100%', height: 130, borderRadius: 12, overflow: 'hidden', backgroundColor: '#eceff1', position: 'relative' },
 	peekImage: { width: '100%', height: '100%' },
 	peekFavBtn: {
 		position: 'absolute',
@@ -738,7 +688,7 @@ const styles = StyleSheet.create({
 	peekBtn: { backgroundColor: COLOR_TEAL, borderRadius: 12, paddingHorizontal: 10, paddingVertical: 5 },
 	peekBtnText: { color: '#fff', fontWeight: '700', fontSize: 11, fontFamily: 'Montserrat-Bold' },
 
-	// Todos los restaurantes
+	// Todos los lugares (grid: borde teal, categoría + rating, botón ancho)
 	allGrid: { flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'space-between', marginTop: 14 },
 	allCard: {
 		width: '48%',
@@ -767,24 +717,12 @@ const styles = StyleSheet.create({
 		alignItems: 'center',
 		justifyContent: 'center',
 	},
-	noDispoBadge: {
-		position: 'absolute',
-		bottom: 8,
-		left: 8,
-		backgroundColor: COLOR_ORANGE,
-		borderRadius: 8,
-		paddingHorizontal: 8,
-		paddingVertical: 3,
-	},
-	noDispoBadgeText: { color: '#fff', fontSize: 10, fontFamily: 'Montserrat-Bold' },
 	allBody: { padding: 12 },
 	allName: { fontSize: 15, fontFamily: 'Montserrat-Bold', color: COLOR_TEXT_DARK },
-	allLocation: { fontSize: 11.5, fontFamily: 'Montserrat-Regular', color: COLOR_TEXT_MUTED, marginTop: 2 },
 	allInfoRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginTop: 6 },
 	allCategory: { fontSize: 13, fontFamily: 'Montserrat-SemiBold', color: COLOR_TEAL },
 	allRatingRow: { flexDirection: 'row', alignItems: 'center', gap: 3 },
 	allRatingText: { fontSize: 13, fontFamily: 'Montserrat-SemiBold', color: COLOR_TEXT_DARK },
-	allPrice: { fontSize: 12.5, fontFamily: 'Montserrat-SemiBold', color: COLOR_ORANGE, marginTop: 6 },
 	allBtn: {
 		marginTop: 10,
 		alignSelf: 'stretch',
@@ -795,12 +733,54 @@ const styles = StyleSheet.create({
 	},
 	allBtnText: { color: '#fff', fontSize: 13, fontFamily: 'Montserrat-Bold' },
 
+	// Results Listing (grid tipo card, cuando hay filtro/búsqueda activa)
+	resultCard: {
+		width: '48%',
+		backgroundColor: '#fff',
+		borderRadius: 14,
+		overflow: 'hidden',
+		borderWidth: 1,
+		borderColor: COLOR_ORANGE,
+		elevation: 1,
+		shadowColor: '#000',
+		shadowOpacity: 0.05,
+		shadowRadius: 4,
+		shadowOffset: { width: 0, height: 2 },
+	},
+	resultImageWrap: { width: '100%', height: 110, position: 'relative', backgroundColor: '#eceff1' },
+	resultImage: { width: '100%', height: '100%' },
 	resultImagePlaceholder: { alignItems: 'center', justifyContent: 'center' },
+	favBtn: {
+		position: 'absolute',
+		top: 8,
+		right: 8,
+		width: 28,
+		height: 28,
+		borderRadius: 14,
+		backgroundColor: 'rgba(0,0,0,0.35)',
+		alignItems: 'center',
+		justifyContent: 'center',
+	},
+	resultBody: { padding: 10 },
+	resultName: { fontSize: 13.5, fontFamily: 'Montserrat-Bold', color: COLOR_TEXT_DARK },
+	resultInfoRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginTop: 4 },
+	resultType: { flex: 1, marginRight: 6, fontSize: 11, fontFamily: 'Montserrat-Regular', color: COLOR_TEXT_MUTED },
+	resultPrice: { fontSize: 13, fontFamily: 'Montserrat-Bold', color: COLOR_TEAL },
+	resultBtn: {
+		marginTop: 8,
+		alignSelf: 'stretch',
+		alignItems: 'center',
+		backgroundColor: COLOR_TEAL_SOFT,
+		borderRadius: 10,
+		paddingVertical: 8,
+	},
+	resultBtnText: { color: COLOR_TEAL, fontSize: 12, fontFamily: 'Montserrat-Bold' },
 
-	// Estado de carga / vacío
-	loadingRow: { alignItems: 'center', paddingVertical: 24 },
+	// Estado de carga
+	loadingRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', paddingVertical: 24, gap: 8 },
 	loadingText: { fontSize: 13, fontFamily: 'Montserrat-Regular', color: COLOR_TEXT_MUTED },
 
+	// Empty State
 	emptyState: { alignItems: 'center', justifyContent: 'center', paddingVertical: 48, paddingHorizontal: 24 },
 	emptyIconCircle: {
 		width: 72,
@@ -836,59 +816,4 @@ const styles = StyleSheet.create({
 		paddingVertical: 10,
 	},
 	emptyBtnText: { color: '#fff', fontSize: 13, fontFamily: 'Montserrat-Bold' },
-
-	// Results Listing
-	restCard: { backgroundColor: '#fff', borderRadius: 18, overflow: 'hidden', borderWidth: 1, borderColor: COLOR_ORANGE },
-	restTop: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', padding: 12 },
-	restTag: { backgroundColor: COLOR_TEAL, borderRadius: 8, paddingHorizontal: 10, paddingVertical: 4 },
-	restTagText: { color: '#fff', fontSize: 11, fontFamily: 'Montserrat-SemiBold' },
-	restActions: { flexDirection: 'row', gap: 8 },
-	iconBtn: { backgroundColor: '#f1f5f8', borderRadius: 8, padding: 6 },
-	restImageBox: { alignItems: 'center', justifyContent: 'center', height: 90, backgroundColor: '#eceff1' },
-	restImg: { width: 90, height: 90, borderRadius: 12 },
-	ratingBadge: {
-		position: 'absolute',
-		top: 8,
-		right: 8,
-		backgroundColor: '#263238',
-		borderRadius: 14,
-		paddingHorizontal: 10,
-		paddingVertical: 4,
-		flexDirection: 'row',
-		alignItems: 'center',
-	},
-	ratingBadgeText: { color: '#fff', fontSize: 11, fontFamily: 'Montserrat-Bold', marginLeft: 4 },
-	restBody: { padding: 14 },
-	restTitle: { fontSize: 15, fontFamily: 'Montserrat-Bold', color: COLOR_TEXT_DARK },
-	priceRange: { fontSize: 13, fontFamily: 'Montserrat-Bold', color: COLOR_ORANGE },
-	priceRangeUnit: { fontSize: 11, fontFamily: 'Montserrat-Medium', color: COLOR_TEXT_MUTED },
-	restLoc: { fontSize: 12, fontFamily: 'Montserrat-Medium', color: COLOR_TEXT_MUTED, marginTop: 2 },
-	tagsWrap: { flexDirection: 'row', flexWrap: 'wrap', gap: 6, marginTop: 8 },
-	specTag: { backgroundColor: COLOR_TEAL_SOFT, borderRadius: 8, paddingHorizontal: 10, paddingVertical: 4 },
-	specTagText: { color: COLOR_TEAL, fontSize: 11, fontFamily: 'Montserrat-Medium' },
-	restSchedule: { fontSize: 12, fontFamily: 'Montserrat-Medium', color: COLOR_TEXT_MUTED },
-	disponible: { fontSize: 12, fontFamily: 'Montserrat-Bold' },
-	actionsRow: { flexDirection: 'row', gap: 14, marginTop: 18 },
-	outlineBtn: {
-		flex: 1,
-		flexDirection: 'row',
-		alignItems: 'center',
-		justifyContent: 'center',
-		borderWidth: 1,
-		borderColor: COLOR_TEAL,
-		paddingVertical: 12,
-		borderRadius: 10,
-		gap: 6,
-	},
-	outlineBtnText: { color: COLOR_TEAL, fontSize: 13, fontFamily: 'Montserrat-SemiBold' },
-	primaryBtn: {
-		flex: 1,
-		flexDirection: 'row',
-		alignItems: 'center',
-		justifyContent: 'center',
-		backgroundColor: COLOR_ORANGE,
-		paddingVertical: 12,
-		borderRadius: 10,
-	},
-	primaryBtnText: { color: '#fff', fontSize: 13, fontFamily: 'Montserrat-Bold' },
 });
