@@ -1,28 +1,52 @@
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import React from 'react';
-import { Image, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import { Image, Linking, Platform, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { COLOR_DISLIKE, COLOR_ORANGE, COLOR_TEAL, COLOR_TEXT_MUTED } from '../../constants/colors';
 
-// Tarjeta de una publicación de la colección "Comunidad". Todos los datos
-// (usuarioId, nombreUsuario, imagenUsuario, descripcion, imagenURL, lugar,
-// departamento, categoria) vienen directo de Firestore, sin nada hardcodeado.
+// Abre la app de mapas nativa (o Google Maps en el navegador como respaldo)
+// apuntando al GeoPoint guardado en el campo "Ubicacion" del post.
+function openDirections(geoPoint) {
+  if (!geoPoint || typeof geoPoint.latitude !== 'number' || typeof geoPoint.longitude !== 'number') {
+    return;
+  }
+  const { latitude, longitude } = geoPoint;
+  const nativeUrl =
+    Platform.OS === 'ios'
+      ? `maps:0,0?q=${latitude},${longitude}`
+      : `geo:0,0?q=${latitude},${longitude}`;
+  const webUrl = `https://www.google.com/maps/search/?api=1&query=${latitude},${longitude}`;
+
+  Linking.openURL(nativeUrl).catch(() => Linking.openURL(webUrl));
+}
+
 export default function PostCard({
   post,
-  likeCount,
+  lugarNombre,
   userInteraction, // 'meGusta' | 'noMeGusta' | null
   isSaved,
   onToggleLike,
   onPressDislike,
   onToggleSave,
+  onOpenDetail,
 }) {
   const liked = userInteraction === 'meGusta';
   const disliked = userInteraction === 'noMeGusta';
+  const likeCount = post.meGustaCount || 0;
+  const starsCount = post.calificacionEstrellas || 0;
+  const hasLocation =
+    post.Ubicacion &&
+    typeof post.Ubicacion.latitude === 'number' &&
+    typeof post.Ubicacion.longitude === 'number';
 
   return (
-    <View style={styles.card}>
+    <TouchableOpacity
+      style={styles.card}
+      activeOpacity={0.9}
+      onPress={() => onOpenDetail && onOpenDetail(post)}
+    >
       <View style={styles.headerRow}>
-        {post.imagenUsuario ? (
-          <Image source={{ uri: post.imagenUsuario }} style={styles.avatar} />
+        {post.fotoPerfilURL ? (
+          <Image source={{ uri: post.fotoPerfilURL }} style={styles.avatar} />
         ) : (
           <View style={[styles.avatar, styles.avatarPlaceholder]}>
             <MaterialCommunityIcons name="account" size={18} color="#fff" />
@@ -30,27 +54,34 @@ export default function PostCard({
         )}
         <View style={{ flex: 1, marginLeft: 10 }}>
           <Text style={styles.username} numberOfLines={1}>
-            {post.nombreUsuario}
+            {post.nombreUsuario || 'Usuario'}
           </Text>
-          {!!(post.lugar || post.departamento) && (
+          {!!lugarNombre && (
             <View style={styles.locationRow}>
               <MaterialCommunityIcons name="map-marker" size={12} color={COLOR_TEAL} />
               <Text style={styles.locationText} numberOfLines={1}>
-                {[post.lugar, post.departamento].filter(Boolean).join(', ')}
+                {lugarNombre}
               </Text>
             </View>
           )}
         </View>
       </View>
 
-      {!!post.descripcion && <Text style={styles.description}>{post.descripcion}</Text>}
+      {!!post.texto && <Text style={styles.description}>{post.texto}</Text>}
 
       {post.imagenURL ? (
         <Image source={{ uri: post.imagenURL }} style={styles.postImage} resizeMode="cover" />
       ) : null}
 
       <View style={styles.actionsRow}>
-        <TouchableOpacity style={styles.actionBtn} activeOpacity={0.8} onPress={() => onToggleLike(post)}>
+        <TouchableOpacity
+          style={styles.actionBtn}
+          activeOpacity={0.8}
+          onPress={(e) => {
+            e.stopPropagation?.();
+            onToggleLike(post);
+          }}
+        >
           <MaterialCommunityIcons
             name={liked ? 'heart' : 'heart-outline'}
             size={22}
@@ -59,7 +90,14 @@ export default function PostCard({
           <Text style={styles.actionCount}>{likeCount}</Text>
         </TouchableOpacity>
 
-        <TouchableOpacity style={styles.actionBtn} activeOpacity={0.8} onPress={() => onPressDislike(post)}>
+        <TouchableOpacity
+          style={styles.actionBtn}
+          activeOpacity={0.8}
+          onPress={(e) => {
+            e.stopPropagation?.();
+            onPressDislike(post);
+          }}
+        >
           <MaterialCommunityIcons
             name={disliked ? 'thumb-down' : 'thumb-down-outline'}
             size={20}
@@ -67,9 +105,34 @@ export default function PostCard({
           />
         </TouchableOpacity>
 
+        <View style={styles.actionBtn}>
+          <MaterialCommunityIcons name="star" size={20} color="#F5B400" />
+          <Text style={styles.actionCount}>{starsCount}</Text>
+        </View>
+
         <View style={{ flex: 1 }} />
 
-        <TouchableOpacity activeOpacity={0.8} onPress={() => onToggleSave(post)}>
+        {hasLocation && (
+          <TouchableOpacity
+            style={styles.directionsBtn}
+            activeOpacity={0.8}
+            onPress={(e) => {
+              e.stopPropagation?.();
+              openDirections(post.Ubicacion);
+            }}
+          >
+            <MaterialCommunityIcons name="map-marker-radius-outline" size={18} color={COLOR_TEAL} />
+            <Text style={styles.directionsBtnText}>Cómo llegar</Text>
+          </TouchableOpacity>
+        )}
+
+        <TouchableOpacity
+          activeOpacity={0.8}
+          onPress={(e) => {
+            e.stopPropagation?.();
+            onToggleSave(post);
+          }}
+        >
           <MaterialCommunityIcons
             name={isSaved ? 'bookmark' : 'bookmark-outline'}
             size={22}
@@ -77,7 +140,7 @@ export default function PostCard({
           />
         </TouchableOpacity>
       </View>
-    </View>
+    </TouchableOpacity>
   );
 }
 
@@ -107,4 +170,14 @@ const styles = StyleSheet.create({
   actionsRow: { flexDirection: 'row', alignItems: 'center', paddingTop: 4 },
   actionBtn: { flexDirection: 'row', alignItems: 'center', marginRight: 20 },
   actionCount: { marginLeft: 5, fontSize: 12.5, color: COLOR_TEXT_MUTED, fontWeight: '600' },
+  directionsBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#EAF7F4',
+    borderRadius: 16,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    marginRight: 14,
+  },
+  directionsBtnText: { fontSize: 11.5, color: COLOR_TEAL, fontWeight: '700', marginLeft: 4 },
 });

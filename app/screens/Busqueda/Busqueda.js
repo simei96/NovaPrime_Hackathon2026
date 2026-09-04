@@ -205,6 +205,10 @@ export default function MapScreen() {
     router.push(`/places/${placeId}`);
   }
 
+  // La tarjeta de oferta (CTA) apunta al mismo lugar que promociona, en vez de
+  // a una pantalla de promoción aparte. En Firestore, el documento en
+  // "Promociones" debe tener un campo LugarId (o lugarId) con el id del
+  // documento correspondiente en "Lugares", por ejemplo "Lugar_002".
   const promoLugarId = promoIsla?.LugarId || promoIsla?.lugarId || null;
 
   function goToPromoPlace() {
