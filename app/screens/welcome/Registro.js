@@ -6,7 +6,7 @@ import { createUserWithEmailAndPassword, updateProfile } from 'firebase/auth';
 import { collection, doc, getDocs, limit, query, serverTimestamp, setDoc, where, } from 'firebase/firestore';
 import { useCallback, useRef, useState } from 'react';
 import {
-  ActivityIndicator, Alert, KeyboardAvoidingView, Platform, ScrollView, StyleSheet, Text, TextInput,
+  ActivityIndicator, Alert, KeyboardAvoidingView, Linking, Modal, Platform, ScrollView, StyleSheet, Text, TextInput,
   TouchableOpacity, View,
 } from 'react-native';
 import { auth, db } from '../../../firebaseConfig';
@@ -21,6 +21,10 @@ const COLOR_TEXT_MUTED = '#7A8489';
 const COLOR_DANGER = '#D9483C';
 
 const HEADER_HEIGHT = 190;
+
+// URL externa a la que se dirige al usuario si confirma que quiere ser
+// anfitrión en la ventana emergente.
+const ANFITRION_URL = 'https://antoniodev-001-site1.itempurl.com/';
 
 // Categorías de gustos disponibles
 const CATEGORIAS = [
@@ -58,8 +62,11 @@ export default function Registro() {
   const [showConfirm, setShowConfirm] = useState(false);
   const [showPasswordRules, setShowPasswordRules] = useState(false);
   const [selectedGustos, setSelectedGustos] = useState([]);
-  const [userType, setUserType] = useState('visitante'); // 'visitante' | 'anfitrion' estos son los modos disponibles
+  const [userType, setUserType] = useState('visitante');
   const [submitting, setSubmitting] = useState(false);
+
+  // Controla la ventana emergente de confirmación al tocar "Anfitrión"
+  const [anfitrionModalVisible, setAnfitrionModalVisible] = useState(false);
 
   // Estado de disponibilidad de nombre completo
   // 'idle' | 'checking' | 'available' | 'taken'
@@ -79,7 +86,6 @@ export default function Registro() {
     setErrors((prev) => (prev[field] ? { ...prev, [field]: '' } : prev));
   };
 
-  //Esto es para evitar el scroll accidental NO TOCAR
   const scrollToBottom = () => {
     setTimeout(() => scrollRef.current?.scrollToEnd({ animated: true }), 150);
   };
@@ -91,8 +97,30 @@ export default function Registro() {
     if (errors.gustos) clearError('gustos');
   };
 
-  //Validación de unicidad contra Firestore
+  //Navegacion a la pantalla de anfitrion
+  const handlePressAnfitrion = () => {
+    setAnfitrionModalVisible(true);
+  };
+  const handleConfirmAnfitrion = async () => {
+    setAnfitrionModalVisible(false);
+    setUserType('anfitrion');
+    try {
+      const canOpen = await Linking.canOpenURL(ANFITRION_URL);
+      if (canOpen) {
+        await Linking.openURL(ANFITRION_URL);
+      } else {
+        Alert.alert('No se pudo abrir el enlace', 'Intenta de nuevo más tarde.');
+      }
+    } catch (error) {
+      Alert.alert('No se pudo abrir el enlace', error.message || String(error));
+    }
+  };
+  const handleCancelAnfitrion = () => {
+    setAnfitrionModalVisible(false);
+    setUserType('visitante');
+  };
 
+  //Validación de unicidad contra Firestore
   const checkFullNameAvailability = useCallback(async () => {
     const value = fullName.trim();
     if (!value) {
@@ -266,14 +294,7 @@ export default function Registro() {
         fechaRegistro: serverTimestamp(),
       });
 
-      if (userType === 'anfitrion') {
-        // cuando esté lista la pantalla de anfitrión, se podra navegar allí
-        Alert.alert(
-          'Cuenta creada',
-          'El modo anfitrión estará disponible próximamente. Por ahora ingresarás como visitante.'
-        );
-      }
-
+      //Navegacion a la pantalla principal
       router.replace('/(tabs)');
     } catch (error) {
       const code = error?.code || '';
@@ -294,8 +315,6 @@ export default function Registro() {
   const goToLogin = () => {
     router.push('/screens/Welcome');
   };
-
-  // Ícono + color según el estado de disponibilidad
   const renderAvailabilityBadge = (status) => {
     if (status === 'checking') {
       return <ActivityIndicator size="small" color={COLOR_TEAL} />;
@@ -521,10 +540,11 @@ export default function Registro() {
                 </Text>
               </TouchableOpacity>
 
+              {/* Navegacion a la pantalla de anfitrion */}
               <TouchableOpacity
                 style={[styles.userTypeCard, userType === 'anfitrion' && styles.userTypeCardActive]}
                 activeOpacity={0.85}
-                onPress={() => setUserType('anfitrion')}
+                onPress={handlePressAnfitrion}
               >
                 <MaterialCommunityIcons
                   name="home-account"
@@ -567,6 +587,45 @@ export default function Registro() {
           </View>
         </ScrollView>
       </View>
+
+      {/* Ventana emergente de confirmación al tocar "Anfitrión" */}
+      <Modal
+        visible={anfitrionModalVisible}
+        transparent
+        animationType="fade"
+        onRequestClose={handleCancelAnfitrion}
+      >
+        <View style={styles.anfitrionBackdrop}>
+          <View style={styles.anfitrionModalBox}>
+            <View style={styles.anfitrionIconCircle}>
+              <MaterialCommunityIcons name="home-account" size={28} color={COLOR_TEAL} />
+            </View>
+            <Text style={styles.anfitrionModalTitle}>
+              ¿Estás preparado para formar parte de Nikaia?
+            </Text>
+            <Text style={styles.anfitrionModalSubtitle}>
+              Te llevaremos a completar tu registro como anfitrión.
+            </Text>
+
+            <View style={styles.anfitrionBtnRow}>
+              <TouchableOpacity
+                style={styles.anfitrionNoBtn}
+                activeOpacity={0.85}
+                onPress={handleCancelAnfitrion}
+              >
+                <Text style={styles.anfitrionNoBtnText}>No</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={styles.anfitrionSiBtn}
+                activeOpacity={0.85}
+                onPress={handleConfirmAnfitrion}
+              >
+                <Text style={styles.anfitrionSiBtnText}>Sí</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
     </KeyboardAvoidingView>
   );
 }
@@ -832,6 +891,76 @@ const styles = StyleSheet.create({
   secondaryBtnText: {
     color: COLOR_TEAL,
     fontSize: 14.5,
+    fontFamily: 'Montserrat-Bold',
+  },
+
+  // Ventana emergente de confirmación "Anfitrión"
+  anfitrionBackdrop: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.45)',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 24,
+  },
+  anfitrionModalBox: {
+    width: '100%',
+    backgroundColor: '#fff',
+    borderRadius: 20,
+    padding: 24,
+    alignItems: 'center',
+  },
+  anfitrionIconCircle: {
+    width: 58,
+    height: 58,
+    borderRadius: 29,
+    backgroundColor: COLOR_TEAL_SOFT,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: 14,
+  },
+  anfitrionModalTitle: {
+    fontSize: 17,
+    fontFamily: 'Montserrat-Bold',
+    color: COLOR_TEXT_DARK,
+    textAlign: 'center',
+    marginBottom: 8,
+  },
+  anfitrionModalSubtitle: {
+    fontSize: 13,
+    fontFamily: 'Montserrat-Regular',
+    color: COLOR_TEXT_MUTED,
+    textAlign: 'center',
+    lineHeight: 18,
+    marginBottom: 20,
+  },
+  anfitrionBtnRow: {
+    flexDirection: 'row',
+    gap: 12,
+    width: '100%',
+  },
+  anfitrionNoBtn: {
+    flex: 1,
+    borderWidth: 1.5,
+    borderColor: COLOR_TEAL,
+    borderRadius: 12,
+    paddingVertical: 13,
+    alignItems: 'center',
+  },
+  anfitrionNoBtnText: {
+    color: COLOR_TEAL,
+    fontSize: 15,
+    fontFamily: 'Montserrat-Bold',
+  },
+  anfitrionSiBtn: {
+    flex: 1,
+    backgroundColor: COLOR_TEAL,
+    borderRadius: 12,
+    paddingVertical: 13,
+    alignItems: 'center',
+  },
+  anfitrionSiBtnText: {
+    color: '#fff',
+    fontSize: 15,
     fontFamily: 'Montserrat-Bold',
   },
 });

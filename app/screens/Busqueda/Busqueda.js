@@ -97,7 +97,7 @@ export default function MapScreen() {
   const [loading, setLoading] = useState(true);
   const [favorites, setFavorites] = useState({});
   const [promoIsla, setPromoIsla] = useState(null);
-  
+
   // Búsqueda por voz: placeholder visual, listo para conectar un motor de reconocimiento de voz (ej. @react-native-voice/voice) más adelante.
   const [listening, setListening] = useState(false);
 
@@ -113,7 +113,7 @@ export default function MapScreen() {
             return {
               id: d.id,
               name: v.Nombre || v.name || 'Sin nombre',
-              type: v.Tipo || v.type || 'Otro',
+              type: v.Categoria || v.categoria || v.Tipo || v.type || 'Otro',
               desc: v.Descripcion || v.desc || '',
               rating:
                 typeof v.Rating === 'number'
@@ -199,6 +199,21 @@ export default function MapScreen() {
     // Para futuro integrar reconocimiento de voz real. Por ahora solo
     // muestra el estado "escuchando" en el ícono del micrófono.
     setListening((prev) => !prev);
+  }
+
+  function goToPlaceDetail(placeId) {
+    router.push(`/places/${placeId}`);
+  }
+
+  const promoLugarId = promoIsla?.LugarId || promoIsla?.lugarId || null;
+
+  function goToPromoPlace() {
+    if (promoLugarId) {
+      goToPlaceDetail(promoLugarId);
+    } else {
+      // Respaldo temporal mientras se agrega el campo LugarId a la promoción.
+      router.push('/promotions/Promo_004');
+    }
   }
 
   return (
@@ -299,8 +314,13 @@ export default function MapScreen() {
           })}
         </ScrollView>
 
-        {/* Promotional Card / CTA Card (usa Promo_004) */}
-        <View style={styles.ctaCard}>
+        {/* Promotional Card / CTA Card (usa Promo_004) — toda la tarjeta es
+            tocable y navega al detalle del lugar promocionado */}
+        <TouchableOpacity
+          style={styles.ctaCard}
+          activeOpacity={0.9}
+          onPress={goToPromoPlace}
+        >
           <View style={styles.ctaLeft}>
             <Text style={styles.ctaTitle} numberOfLines={2}>
               {promoIsla?.Titulo ||
@@ -314,7 +334,7 @@ export default function MapScreen() {
             <TouchableOpacity
               activeOpacity={0.85}
               style={styles.ctaBtn}
-              onPress={() => router.push('/promotions/Promo_004')}
+              onPress={goToPromoPlace}
             >
               <Text style={styles.ctaBtnText}>
                 {promoIsla?.CTA || 'Ver oferta'}
@@ -338,7 +358,7 @@ export default function MapScreen() {
               </View>
             )}
           </View>
-        </View>
+        </TouchableOpacity>
 
         {/* Results Listing Component */}
         <Text style={styles.sectionTitle}>
@@ -355,7 +375,12 @@ export default function MapScreen() {
         {!loading && filteredPlaces.length > 0 && (
           <View style={styles.resultsGrid}>
             {filteredPlaces.map((p) => (
-              <View key={p.id} style={styles.resultCard}>
+              <TouchableOpacity
+                key={p.id}
+                style={styles.resultCard}
+                activeOpacity={0.9}
+                onPress={() => goToPlaceDetail(p.id)}
+              >
                 <View style={styles.resultImageWrap}>
                   {p.imageURL ? (
                     <Image
@@ -413,11 +438,12 @@ export default function MapScreen() {
                   <TouchableOpacity
                     style={styles.resultBtn}
                     activeOpacity={0.85}
+                    onPress={() => goToPlaceDetail(p.id)}
                   >
                     <Text style={styles.resultBtnText}>Ver detalles</Text>
                   </TouchableOpacity>
                 </View>
-              </View>
+              </TouchableOpacity>
             ))}
           </View>
         )}

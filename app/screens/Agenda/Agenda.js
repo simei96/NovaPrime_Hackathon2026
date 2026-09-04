@@ -1,43 +1,21 @@
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
 import { onAuthStateChanged } from 'firebase/auth';
-import {
-  collection,
-  onSnapshot,
-  orderBy,
-  query,
-  Timestamp,
-  where,
-} from 'firebase/firestore';
+import { collection, doc, getDoc, onSnapshot, orderBy, query, Timestamp, where } from 'firebase/firestore';
 import React, { useEffect, useMemo, useState } from 'react';
-import {
-  Dimensions,
-  Image,
-  Modal,
-  Platform,
-  SafeAreaView,
-  ScrollView,
-  StatusBar,
-  StyleSheet,
-  Text,
-  TouchableOpacity,
-  View
-} from 'react-native';
+import { Dimensions, Image, Modal, Platform, SafeAreaView, ScrollView, StatusBar, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import MapView, { Marker, PROVIDER_GOOGLE } from 'react-native-maps';
 import { auth, db } from '../../../firebaseConfig';
 
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
-
 const COLOR_TEAL = '#2EAD9A';
 const COLOR_ORANGE = '#D96E32';
 const COLOR_TEAL_SOFT = '#D9F0EC';
 const COLOR_TEXT_DARK = '#222';
 const COLOR_TEXT_MUTED = '#7A8489';
-
 const HORIZONTAL_PADDING = 18;
 const CAROUSEL_CARD_WIDTH = Math.round(SCREEN_WIDTH * 0.6);
 const ANDROID_STATUSBAR_HEIGHT = StatusBar.currentHeight || 24;
-
 const MESES = [
   'Enero', 'Febrero', 'Marzo', 'Abril', 'Mayo', 'Junio',
   'Julio', 'Agosto', 'Septiembre', 'Octubre', 'Noviembre', 'Diciembre',
@@ -54,14 +32,18 @@ const DEPARTAMENTOS_NI = [
   'Región Autónoma de la Costa Caribe Sur',
 ];
 
-// Colores de categoría
+// Colores por categoría
 const CATEGORIAS = {
+  Cultural: COLOR_TEAL,
+  Danza: '#E85D3D',
+  Teatro: '#7B4FA0',
+  Música: '#D6317A',
+  'Artes Visuales': '#2F80C4',
   Gastronomía: '#D96E32',
-  Historia: '#6a4c93',
-  Artesanías: '#8d6e63',
-  Música: '#c2185b',
-  Tradiciones: '#2EAD9A',
   Naturaleza: '#8FB32E',
+  Tradiciones: '#2EAD9A',
+  Historia: '#6A4C93',
+  Artesanías: '#8D6E63',
 };
 
 function fechaKey(date) {
@@ -85,24 +67,49 @@ function generarDiasDelMes(year, month) {
   return dias;
 }
 
+function mapEvento(docSnap) {
+  const v = docSnap.data();
+  const geo = v.Localizacion || v.localizacion || null;
+  return {
+    id: docSnap.id,
+    nombre: v.Titulo || v.titulo || 'Evento',
+    categoria: v['Categoría'] || v.Categoria || v.categoria || 'Cultural',
+    descripcion: v['Descripción'] || v.Descripcion || v.descripcion || '',
+    imagen: v.ImagenURL || v.imagen || null,
+    horaInicio: v.HoraInicio || v.horaInicio || '',
+    horaFin: v.HoraFin || v.horaFin || '',
+    ubicacion: v['Ubicación'] || v.Ubicacion || v.ubicacion || '',
+    estadoConfirmado: typeof v.EstadoDeEvento === 'boolean' ? v.EstadoDeEvento : null,
+    lat: geo && typeof geo.latitude === 'number' ? geo.latitude : null,
+    lng: geo && typeof geo.longitude === 'number' ? geo.longitude : null,
+    fechaJS: v.FechaInicio?.toDate
+      ? v.FechaInicio.toDate()
+      : v.fecha?.toDate
+        ? v.fecha.toDate()
+        : new Date(),
+  };
+}
+
 export default function AgendaScreen() {
   const router = useRouter();
-
-  // Nombre de usuario para el header
-  const [userName, setUserName] = useState(
-    auth.currentUser
-      ? auth.currentUser.displayName ||
-          (auth.currentUser.email ? auth.currentUser.email.split('@')[0] : 'Usuario')
-      : 'Invitado',
-  );
+  const [user, setUser] = useState(auth.currentUser || null);
+  const [userName, setUserName] = useState('Invitado');
 
   useEffect(() => {
-    const unsubAuth = onAuthStateChanged(auth, (user) => {
-      setUserName(
-        user
-          ? user.displayName || (user.email ? user.email.split('@')[0] : 'Usuario')
-          : 'Invitado',
-      );
+    const unsubAuth = onAuthStateChanged(auth, async (u) => {
+      setUser(u);
+      if (!u) {
+        setUserName('Invitado');
+        return;
+      }
+      try {
+        const snap = await getDoc(doc(db, 'Users', u.uid));
+        const fallback = u.displayName || (u.email ? u.email.split('@')[0] : 'Usuario');
+        setUserName(snap.exists() ? snap.data().nombreUsuario || fallback : fallback);
+      } catch (e) {
+        console.warn('Error cargando nombreUsuario:', e);
+        setUserName(u.displayName || (u.email ? u.email.split('@')[0] : 'Usuario'));
+      }
     });
     return () => unsubAuth();
   }, []);
@@ -119,38 +126,34 @@ export default function AgendaScreen() {
   const [showMenu, setShowMenu] = useState(false);
   const [showDeptModal, setShowDeptModal] = useState(false);
 
-  // ── Carga de eventos del mes desde Firestore
   useEffect(() => {
     const inicioMes = new Date(anioActual, mesActual, 1, 0, 0, 0);
     const finMes = new Date(anioActual, mesActual + 1, 0, 23, 59, 59);
 
-    let q = query(
-      collection(db, 'eventos'),
-      where('fecha', '>=', Timestamp.fromDate(inicioMes)),
-      where('fecha', '<=', Timestamp.fromDate(finMes)),
-      orderBy('fecha', 'asc')
+    const q = query(
+      collection(db, 'Eventos'),
+      where('FechaInicio', '>=', Timestamp.fromDate(inicioMes)),
+      where('FechaInicio', '<=', Timestamp.fromDate(finMes)),
+      orderBy('FechaInicio', 'asc'),
     );
 
-    const unsubscribe = onSnapshot(q, (snapshot) => {
-      const lista = snapshot.docs.map((docSnap) => {
-        const data = docSnap.data();
-        return {
-          id: docSnap.id,
-          ...data,
-          fechaJS: data.fecha?.toDate ? data.fecha.toDate() : new Date(data.fecha),
-        };
-      });
-      setEventos(lista);
-    }, (err) => {
-      console.log('Error cargando eventos:', err);
-    });
+    const unsubscribe = onSnapshot(
+      q,
+      (snapshot) => {
+        setEventos(snapshot.docs.map(mapEvento));
+      },
+      (err) => {
+        console.log('Error cargando eventos:', err);
+      },
+    );
 
     return () => unsubscribe();
   }, [mesActual, anioActual]);
 
   const eventosFiltrados = useMemo(() => {
     if (departamentoFiltro === 'Todos') return eventos;
-    return eventos.filter((e) => e.departamento === departamentoFiltro);
+    const term = departamentoFiltro.toLowerCase();
+    return eventos.filter((e) => (e.ubicacion || '').toLowerCase().includes(term));
   }, [eventos, departamentoFiltro]);
 
   const eventosPorDia = useMemo(() => {
@@ -200,10 +203,10 @@ export default function AgendaScreen() {
       <View style={styles.container}>
         <ScrollView
           style={{ flex: 1 }}
-          contentContainerStyle={{ paddingBottom: 32 }}
+          contentContainerStyle={{ paddingBottom: 130 }}
           showsVerticalScrollIndicator={false}
         >
-          {/* Header: nombre de usuario + mes actual*/}
+          {/* Header: nombre de usuario + mes actual */}
           <View style={styles.headerRow}>
             <View style={{ flex: 1 }}>
               <Text style={styles.title}>Agenda de {userName}</Text>
@@ -214,12 +217,17 @@ export default function AgendaScreen() {
             </TouchableOpacity>
           </View>
 
-          {/* Filtro activo*/}
+          {/* Filtro de ubicación */}
           <View style={styles.chipsScrollViewSingle}>
-            <View style={[styles.chip, styles.chipActive, styles.filtroChip]}>
-              <MaterialCommunityIcons name="map-marker-outline" size={16} color="#fff" style={{ marginRight: 6 }} />
-              <Text style={[styles.chipText, styles.chipTextActive]}>{departamentoFiltro}</Text>
-            </View>
+            <TouchableOpacity
+              style={styles.filtroChipSoft}
+              activeOpacity={0.85}
+              onPress={() => setShowDeptModal(true)}
+            >
+              <MaterialCommunityIcons name="map-marker-outline" size={16} color={COLOR_TEAL} style={{ marginRight: 4 }} />
+              <Text style={styles.filtroChipTextSoft}>{departamentoFiltro}</Text>
+              <MaterialCommunityIcons name="chevron-down" size={16} color={COLOR_TEAL} style={{ marginLeft: 2 }} />
+            </TouchableOpacity>
           </View>
 
           {/* Eventos próximos */}
@@ -345,13 +353,22 @@ export default function AgendaScreen() {
                 ) : null}
 
                 <View style={{ padding: 16 }}>
-                  <View style={[styles.statusBadge, styles.badgeInline, { backgroundColor: (CATEGORIAS[eventoSeleccionado.categoria] || COLOR_TEAL) + '22', borderColor: CATEGORIAS[eventoSeleccionado.categoria] || COLOR_TEAL }]}>
-                    <Text style={[styles.statusBadgeText, { color: CATEGORIAS[eventoSeleccionado.categoria] || COLOR_TEAL }]}>
-                      {eventoSeleccionado.categoria}
-                    </Text>
+                  <View style={styles.badgeRow}>
+                    <View style={[styles.statusBadge, styles.badgeInline, { backgroundColor: (CATEGORIAS[eventoSeleccionado.categoria] || COLOR_TEAL) + '22', borderColor: CATEGORIAS[eventoSeleccionado.categoria] || COLOR_TEAL }]}>
+                      <Text style={[styles.statusBadgeText, { color: CATEGORIAS[eventoSeleccionado.categoria] || COLOR_TEAL }]}>
+                        {eventoSeleccionado.categoria}
+                      </Text>
+                    </View>
+                    {eventoSeleccionado.estadoConfirmado === false && (
+                      <Text style={styles.porConfirmarTexto}>Por confirmar</Text>
+                    )}
                   </View>
 
                   <Text style={styles.eventoNombre}>{eventoSeleccionado.nombre}</Text>
+
+                  {!!eventoSeleccionado.descripcion && (
+                    <Text style={styles.eventoDescripcion}>{eventoSeleccionado.descripcion}</Text>
+                  )}
 
                   <View style={styles.eventoInfoRow}>
                     <MaterialCommunityIcons name="calendar" size={18} color={COLOR_TEAL} />
@@ -376,8 +393,8 @@ export default function AgendaScreen() {
                     </View>
                   )}
 
-                  {/* Mini mapa 3D */}
-                  {eventoSeleccionado.lat && eventoSeleccionado.lng && (
+                  {/* Mini mapa, solo si el evento trae Localizacion (GeoPoint) */}
+                  {eventoSeleccionado.lat != null && eventoSeleccionado.lng != null && (
                     <View style={styles.miniMapaContenedor}>
                       <MapView
                         provider={PROVIDER_GOOGLE}
@@ -424,9 +441,14 @@ export default function AgendaScreen() {
 
             {eventosDelDiaSeleccionado.length > 1 && (
               <View style={{ marginTop: 12 }}>
+                <Text style={styles.otrosEventosTitulo}>Otros eventos este día</Text>
                 {eventosDelDiaSeleccionado.filter((e) => e.id !== eventoSeleccionado?.id).map((e) => (
                   <TouchableOpacity key={e.id} style={styles.otroEventoRow} onPress={() => setEventoSeleccionado(e)}>
-                    <View style={[styles.puntoEvento, { backgroundColor: CATEGORIAS[e.categoria] || COLOR_TEAL, marginRight: 8 }]} />
+                    <View style={[styles.otroEventoBadge, { backgroundColor: (CATEGORIAS[e.categoria] || COLOR_TEAL) + '22' }]}>
+                      <Text style={[styles.otroEventoBadgeTexto, { color: CATEGORIAS[e.categoria] || COLOR_TEAL }]} numberOfLines={1}>
+                        {e.categoria}
+                      </Text>
+                    </View>
                     <Text style={styles.otroEventoTexto} numberOfLines={1}>{e.nombre}</Text>
                     <Text style={styles.otroEventoHora}>{e.horaInicio}</Text>
                   </TouchableOpacity>
@@ -515,23 +537,23 @@ const styles = StyleSheet.create({
   },
   menuBtn: { padding: 4, marginTop: 2 },
 
-  // Chips 
+  // Filtro de ubicación
   chipsScrollViewSingle: { paddingHorizontal: HORIZONTAL_PADDING, marginBottom: 16 },
-  chip: {
+  filtroChipSoft: {
     flexDirection: 'row',
     alignItems: 'center',
-    height: 36,
-    borderRadius: 10,
-    paddingHorizontal: 14,
-    borderWidth: 1,
-    borderColor: COLOR_TEAL,
-    backgroundColor: '#fff',
     alignSelf: 'flex-start',
+    height: 34,
+    borderRadius: 10,
+    paddingHorizontal: 12,
+    backgroundColor: COLOR_TEAL_SOFT,
   },
-  chipActive: { backgroundColor: COLOR_TEAL, borderColor: COLOR_TEAL },
-  chipText: { fontSize: 13, color: COLOR_TEAL, fontWeight: '600', fontFamily: 'Montserrat-Medium' },
-  chipTextActive: { color: '#fff' },
-  filtroChip: {},
+  filtroChipTextSoft: {
+    fontSize: 13,
+    color: COLOR_TEAL,
+    fontWeight: '700',
+    fontFamily: 'Montserrat-Medium',
+  },
 
   sectionBlock: { marginBottom: 20 },
   sectionTitle: {
@@ -634,7 +656,10 @@ const styles = StyleSheet.create({
     shadowOffset: { width: 0, height: 3 },
   },
   eventoImagen: { width: '100%', height: 150 },
-  eventoNombre: { fontFamily: 'Montserrat-Bold', color: COLOR_TEXT_DARK, fontSize: 17, marginBottom: 10, marginTop: 8 },
+  badgeRow: { flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 4 },
+  porConfirmarTexto: { fontSize: 11, color: COLOR_ORANGE, fontWeight: '700', fontFamily: 'Montserrat-Bold' },
+  eventoNombre: { fontFamily: 'Montserrat-Bold', color: COLOR_TEXT_DARK, fontSize: 17, marginBottom: 6, marginTop: 8 },
+  eventoDescripcion: { color: '#555', fontSize: 13, lineHeight: 18, marginBottom: 12, fontFamily: 'Montserrat-Regular' },
   eventoInfoRow: { flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 8 },
   eventoInfoTexto: { color: '#444', fontSize: 14, fontFamily: 'Montserrat-Regular' },
 
@@ -666,11 +691,12 @@ const styles = StyleSheet.create({
     paddingVertical: 2,
   },
   statusBadgeText: { fontSize: 10.5, fontWeight: '700', fontFamily: 'Montserrat-Bold' },
-  badgeInline: { position: 'relative', top: 0, left: 0, alignSelf: 'flex-start', marginBottom: 4 },
+  badgeInline: { position: 'relative', top: 0, left: 0, alignSelf: 'flex-start', marginBottom: 0 },
 
   cardName: { fontSize: 13.5, fontWeight: 'bold', color: COLOR_TEXT_DARK, fontFamily: 'Montserrat-Bold', marginBottom: 3 },
   cardSecondary: { fontSize: 11.5, color: COLOR_TEXT_MUTED, fontFamily: 'Montserrat-Regular' },
 
+  otrosEventosTitulo: { fontSize: 13, fontWeight: '700', color: COLOR_TEXT_MUTED, marginBottom: 8, fontFamily: 'Montserrat-Bold' },
   otroEventoRow: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -680,7 +706,10 @@ const styles = StyleSheet.create({
     borderColor: COLOR_TEAL_SOFT,
     padding: 10,
     marginBottom: 6,
+    gap: 8,
   },
+  otroEventoBadge: { borderRadius: 6, paddingHorizontal: 6, paddingVertical: 2 },
+  otroEventoBadgeTexto: { fontSize: 9.5, fontWeight: '700', fontFamily: 'Montserrat-Bold' },
   otroEventoTexto: { flex: 1, color: '#444', fontSize: 13, fontFamily: 'Montserrat-Regular' },
   otroEventoHora: { color: COLOR_TEXT_MUTED, fontSize: 12, fontFamily: 'Montserrat-Regular' },
 

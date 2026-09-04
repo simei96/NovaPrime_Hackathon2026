@@ -1,12 +1,17 @@
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
 import { onAuthStateChanged } from 'firebase/auth';
-import { addDoc, collection, doc, getDoc, onSnapshot, } from 'firebase/firestore';
+import {
+  addDoc, collection, deleteDoc, doc, getDoc, onSnapshot,
+  orderBy, query, where,
+} from 'firebase/firestore';
 import React, { useEffect, useState } from 'react';
 import {
-  ActivityIndicator, Alert, Dimensions, Image, KeyboardAvoidingView, Modal,
-  Platform, ScrollView, StatusBar, StyleSheet, Text, TextInput, TouchableOpacity, View,
+  ActivityIndicator, Alert, Dimensions, Image, Modal,
+  ScrollView, StatusBar, StyleSheet, Text, TouchableOpacity, View,
 } from 'react-native';
+import DislikeReasonModal from '../../../components/community/DislikeReasonModal';
+import PostCard from '../../../components/community/PostCard';
 import { auth, db } from '../../../firebaseConfig';
 
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
@@ -15,20 +20,9 @@ const { width: SCREEN_WIDTH } = Dimensions.get('window');
 const COLOR_TEAL = '#2EAD9A';
 const COLOR_ORANGE = '#D96E32';
 const COLOR_OLIVE = '#8FB32E';
-const COLOR_DISLIKE = '#FF5252';
 
 const STORY_SIZE = 64;
 const STORY_RING = 3;
-
-// Motivos seleccionables al presionar "no me gusta"
-const DISLIKE_REASONS = [
-  { id: 'noInteresa', label: 'No me interesa este lugar' },
-  { id: 'infoIncorrecta', label: 'Información incorrecta o desactualizada' },
-  { id: 'malaCalidad', label: 'Fotos o contenido de baja calidad' },
-  { id: 'yaLoConozco', label: 'Ya conozco este lugar' },
-  { id: 'noSeguro', label: 'No parece seguro o accesible' },
-  { id: 'otro', label: 'Otro motivo' },
-];
 
 // Devuelve el valor solo si es un string renderizable; si es un GeoPoint,
 // Timestamp u otro objeto de Firestore, devuelve '' en vez de romper el render.
@@ -80,22 +74,30 @@ export default function CalendarScreen() {
   const router = useRouter();
   const [user, setUser] = useState(auth.currentUser || null);
 
+  // Historias (colección "Lugares") — sin cambios respecto a la versión anterior
   const [stories, setStories] = useState([]);
   const [loadingStories, setLoadingStories] = useState(true);
-
-  // Visor de historias
   const [storyModalVisible, setStoryModalVisible] = useState(false);
   const [activeStory, setActiveStory] = useState(null);
   const [loadingStoryDetail, setLoadingStoryDetail] = useState(false);
-
-  // Interacciones sobre las historias 
   const [liked, setLiked] = useState({});
   const [disliked, setDisliked] = useState({});
   const [savedStories, setSavedStories] = useState({});
   const [savingStory, setSavingStory] = useState(false);
 
-  // Modal de "no me gusta" con motivos seleccionables y comentario
+  // Feed de publicaciones (colección "Comunidad")
+  const [posts, setPosts] = useState([]);
+  const [loadingPosts, setLoadingPosts] = useState(true);
+  // {publicacionId: {meGusta, noMeGusta}} — contado desde InteraccionesPublicaciones
+  const [likeCounts, setLikeCounts] = useState({});
+  // {publicacionId: {docId, tipo}} — interacción del usuario actual
+  const [interactionsMap, setInteractionsMap] = useState({});
+  // {publicacionId: favoritoDocId} — publicaciones guardadas por el usuario actual
+  const [savedPostsMap, setSavedPostsMap] = useState({});
+
+  // Modal de "no me gusta" compartido entre historias y publicaciones
   const [dislikeModalVisible, setDislikeModalVisible] = useState(false);
+  const [dislikeTarget, setDislikeTarget] = useState(null); // { type: 'story' | 'post', item }
   const [selectedReasons, setSelectedReasons] = useState({});
   const [dislikeComment, setDislikeComment] = useState('');
   const [submittingDislike, setSubmittingDislike] = useState(false);
@@ -138,13 +140,90 @@ export default function CalendarScreen() {
     return () => unsub();
   }, []);
 
+  // Publicaciones activas de la comunidad, en tiempo real, más recientes primero.
+  // Requiere un índice compuesto (estado + creadoEn) — Firestore te dará el link
+  // para crearlo automáticamente la primera vez que corras esta consulta.
+  useEffect(() => {
+    const q = query(
+      collection(db, 'Comunidad'),
+      where('estado', '==', 'activo'),
+      orderBy('creadoEn', 'desc'),
+    );
+    const unsub = onSnapshot(
+      q,
+      (snap) => {
+        const mapped = snap.docs.map((d) => ({ publicacionId: d.id, ...d.data() }));
+        setPosts(mapped);
+        setLoadingPosts(false);
+      },
+      (err) => {
+        console.warn('Error cargando publicaciones de Comunidad:', err);
+        setLoadingPosts(false);
+      },
+    );
+    return () => unsub();
+  }, []);
+
+  // Todas las interacciones: sirve para contar me gusta / no me gusta por
+  // publicación y para saber cuál es la reacción del usuario actual.
+  useEffect(() => {
+    const unsub = onSnapshot(
+      collection(db, 'InteraccionesPublicaciones'),
+      (snap) => {
+        const counts = {};
+        const mine = {};
+        snap.docs.forEach((d) => {
+          const v = d.data();
+          if (!v.publicacionId) return;
+          if (!counts[v.publicacionId]) counts[v.publicacionId] = { meGusta: 0, noMeGusta: 0 };
+          if (v.tipo === 'meGusta') counts[v.publicacionId].meGusta += 1;
+          if (v.tipo === 'noMeGusta') counts[v.publicacionId].noMeGusta += 1;
+          if (user && v.usuarioId === user.uid) {
+            mine[v.publicacionId] = { docId: d.id, tipo: v.tipo };
+          }
+        });
+        setLikeCounts(counts);
+        setInteractionsMap(mine);
+      },
+      (err) => console.warn('Error cargando interacciones de publicaciones:', err),
+    );
+    return () => unsub();
+  }, [user]);
+
+  // Publicaciones que el usuario actual ya guardó en Favoritos
+  useEffect(() => {
+    if (!user) {
+      setSavedPostsMap({});
+      return;
+    }
+    const q = query(
+      collection(db, 'Favoritos'),
+      where('usuarioId', '==', user.uid),
+      where('tipo', '==', 'publicacion'),
+    );
+    const unsub = onSnapshot(
+      q,
+      (snap) => {
+        const map = {};
+        snap.docs.forEach((d) => {
+          const v = d.data();
+          if (v.publicacionId) map[v.publicacionId] = d.id;
+        });
+        setSavedPostsMap(map);
+      },
+      (err) => console.warn('Error cargando favoritos de publicaciones:', err),
+    );
+    return () => unsub();
+  }, [user]);
+
   const storiesSource = stories.length ? stories : FALLBACK_STORIES;
 
   const headerDisplayName = user
     ? user.displayName || (user.email ? user.email.split('@')[0] : 'Usuario')
     : 'Inicia sesión';
 
-  // Abre la historia a pantalla completa y trae los datos del lugar
+  // ---------- Historias (sin cambios funcionales) ----------
+
   async function openStory(story) {
     setActiveStory(story);
     setStoryModalVisible(true);
@@ -159,8 +238,6 @@ export default function CalendarScreen() {
             ? {
                 ...prev,
                 descripcion: safeText(v.descripcion) || safeText(v.Descripcion),
-                // "direccion" es texto; "coordenadas" es un GeoPoint y NUNCA
-                // debe pasarse directo a un <Text> (por eso se formatea aparte).
                 ubicacion:
                   safeText(v.direccion) ||
                   safeText(v.Ubicacion) ||
@@ -192,65 +269,18 @@ export default function CalendarScreen() {
     });
   }
 
-  // Al presionar el pulgar abajo: si ya estaba marcado, se quita directo;
-  // si se va a marcar, primero se piden los motivos en un modal.
-  function onPressDislike(story) {
+  function onPressStoryDislike(story) {
     if (!story) return;
     if (disliked[story.id]) {
       setDisliked((prev) => ({ ...prev, [story.id]: false }));
       return;
     }
+    setDislikeTarget({ type: 'story', item: story });
     setSelectedReasons({});
     setDislikeComment('');
     setDislikeModalVisible(true);
   }
 
-  function toggleReasonOption(reasonId) {
-    setSelectedReasons((prev) => ({ ...prev, [reasonId]: !prev[reasonId] }));
-  }
-
-  function closeDislikeModal() {
-    setDislikeModalVisible(false);
-  }
-
-  // Guarda el motivo del "no me gusta" en Firestore, colección "InteraccionesLugares"
-  async function submitDislike() {
-    if (!activeStory) return;
-    if (!user) {
-      Alert.alert('Inicia sesión', 'Necesitas iniciar sesión para calificar historias.');
-      setDislikeModalVisible(false);
-      router.push('/login');
-      return;
-    }
-
-    const motivos = Object.keys(selectedReasons).filter((k) => selectedReasons[k]);
-    if (motivos.length === 0 && !dislikeComment.trim()) {
-      Alert.alert('Selecciona un motivo', 'Elige al menos una opción o escribe un comentario.');
-      return;
-    }
-
-    setSubmittingDislike(true);
-    try {
-      await addDoc(collection(db, 'InteraccionesLugares'), {
-        lugarId: activeStory.id,
-        userId: user.uid,
-        tipo: 'noMeGusta',
-        motivos,
-        comentario: dislikeComment.trim(),
-        creadoEn: new Date(),
-      });
-      setDisliked((prev) => ({ ...prev, [activeStory.id]: true }));
-      setLiked((prev) => ({ ...prev, [activeStory.id]: false }));
-      setDislikeModalVisible(false);
-    } catch (e) {
-      console.warn('Error guardando el motivo de no me gusta:', e);
-      Alert.alert('Error', 'No se pudo guardar tu respuesta. Intenta de nuevo.');
-    } finally {
-      setSubmittingDislike(false);
-    }
-  }
-
-  // Guardar la historia como favorito con estado "porReservar"
   async function saveStoryAsFavorito(story) {
     if (!story) return;
     if (!user) {
@@ -277,6 +307,140 @@ export default function CalendarScreen() {
       Alert.alert('Error', 'No se pudo guardar la historia en favoritos.');
     } finally {
       setSavingStory(false);
+    }
+  }
+
+  // ---------- Feed de publicaciones (Comunidad) ----------
+
+  async function togglePostLike(post) {
+    if (!user) {
+      Alert.alert('Inicia sesión', 'Necesitas iniciar sesión para dar me gusta.');
+      router.push('/login');
+      return;
+    }
+    const existing = interactionsMap[post.publicacionId];
+    try {
+      if (existing) {
+        await deleteDoc(doc(db, 'InteraccionesPublicaciones', existing.docId));
+      }
+      if (!existing || existing.tipo !== 'meGusta') {
+        await addDoc(collection(db, 'InteraccionesPublicaciones'), {
+          publicacionId: post.publicacionId,
+          usuarioId: user.uid,
+          tipo: 'meGusta',
+          creadoEn: new Date(),
+        });
+      }
+    } catch (e) {
+      console.warn('Error actualizando me gusta:', e);
+      Alert.alert('Error', 'No se pudo actualizar tu reacción.');
+    }
+  }
+
+  function onPressPostDislike(post) {
+    if (!user) {
+      Alert.alert('Inicia sesión', 'Necesitas iniciar sesión para calificar publicaciones.');
+      router.push('/login');
+      return;
+    }
+    const existing = interactionsMap[post.publicacionId];
+    if (existing && existing.tipo === 'noMeGusta') {
+      deleteDoc(doc(db, 'InteraccionesPublicaciones', existing.docId)).catch((e) =>
+        console.warn('Error quitando no me gusta:', e),
+      );
+      return;
+    }
+    setDislikeTarget({ type: 'post', item: post });
+    setSelectedReasons({});
+    setDislikeComment('');
+    setDislikeModalVisible(true);
+  }
+
+  async function togglePostSave(post) {
+    if (!user) {
+      Alert.alert('Inicia sesión', 'Necesitas iniciar sesión para guardar publicaciones.');
+      router.push('/login');
+      return;
+    }
+    const existingDocId = savedPostsMap[post.publicacionId];
+    try {
+      if (existingDocId) {
+        await deleteDoc(doc(db, 'Favoritos', existingDocId));
+      } else {
+        await addDoc(collection(db, 'Favoritos'), {
+          usuarioId: user.uid,
+          tipo: 'publicacion',
+          publicacionId: post.publicacionId,
+          creadoEn: new Date(),
+        });
+      }
+    } catch (e) {
+      console.warn('Error actualizando favorito:', e);
+      Alert.alert('Error', 'No se pudo actualizar tus favoritos.');
+    }
+  }
+
+  // ---------- Modal de "no me gusta" (compartido) ----------
+
+  function toggleReasonOption(reasonId) {
+    setSelectedReasons((prev) => ({ ...prev, [reasonId]: !prev[reasonId] }));
+  }
+
+  function closeDislikeModal() {
+    setDislikeModalVisible(false);
+  }
+
+  async function submitDislike() {
+    if (!dislikeTarget) return;
+    if (!user) {
+      Alert.alert('Inicia sesión', 'Necesitas iniciar sesión para calificar.');
+      setDislikeModalVisible(false);
+      router.push('/login');
+      return;
+    }
+
+    const motivos = Object.keys(selectedReasons).filter((k) => selectedReasons[k]);
+    if (motivos.length === 0 && !dislikeComment.trim()) {
+      Alert.alert('Selecciona un motivo', 'Elige al menos una opción o escribe un comentario.');
+      return;
+    }
+
+    setSubmittingDislike(true);
+    try {
+      if (dislikeTarget.type === 'post') {
+        const post = dislikeTarget.item;
+        const existing = interactionsMap[post.publicacionId];
+        if (existing) {
+          await deleteDoc(doc(db, 'InteraccionesPublicaciones', existing.docId));
+        }
+        await addDoc(collection(db, 'InteraccionesPublicaciones'), {
+          publicacionId: post.publicacionId,
+          usuarioId: user.uid,
+          tipo: 'noMeGusta',
+          motivos,
+          comentario: dislikeComment.trim(),
+          creadoEn: new Date(),
+        });
+      } else {
+        // Historia (Lugares) — mismo comportamiento de antes
+        const story = dislikeTarget.item;
+        await addDoc(collection(db, 'InteraccionesLugares'), {
+          lugarId: story.id,
+          userId: user.uid,
+          tipo: 'noMeGusta',
+          motivos,
+          comentario: dislikeComment.trim(),
+          creadoEn: new Date(),
+        });
+        setDisliked((prev) => ({ ...prev, [story.id]: true }));
+        setLiked((prev) => ({ ...prev, [story.id]: false }));
+      }
+      setDislikeModalVisible(false);
+    } catch (e) {
+      console.warn('Error guardando el motivo de no me gusta:', e);
+      Alert.alert('Error', 'No se pudo guardar tu respuesta. Intenta de nuevo.');
+    } finally {
+      setSubmittingDislike(false);
     }
   }
 
@@ -343,6 +507,33 @@ export default function CalendarScreen() {
             </ScrollView>
           )}
         </View>
+
+        {/* Feed de publicaciones de la comunidad */}
+        <View style={styles.feedSection}>
+          {loadingPosts ? (
+            <ActivityIndicator size="small" color={COLOR_TEAL} style={{ marginVertical: 20 }} />
+          ) : posts.length === 0 ? (
+            <Text style={styles.emptyFeedText}>Todavía no hay publicaciones activas.</Text>
+          ) : (
+            posts.map((post) => {
+              const counts = likeCounts[post.publicacionId] || { meGusta: 0, noMeGusta: 0 };
+              const myInteraction = interactionsMap[post.publicacionId]?.tipo || null;
+              const isSaved = !!savedPostsMap[post.publicacionId];
+              return (
+                <PostCard
+                  key={post.publicacionId}
+                  post={post}
+                  likeCount={counts.meGusta}
+                  userInteraction={myInteraction}
+                  isSaved={isSaved}
+                  onToggleLike={togglePostLike}
+                  onPressDislike={onPressPostDislike}
+                  onToggleSave={togglePostSave}
+                />
+              );
+            })
+          )}
+        </View>
       </ScrollView>
 
       {/* Visor de historias a pantalla completa */}
@@ -365,14 +556,12 @@ export default function CalendarScreen() {
               <View style={styles.storyViewerTopOverlay} />
               <View style={styles.storyViewerBottomOverlay} />
 
-              {/* Barra de progreso, estilo historia única */}
               <View style={styles.storyProgressRow}>
                 <View style={styles.storyProgressBarBg}>
                   <View style={styles.storyProgressBarFill} />
                 </View>
               </View>
 
-              {/* Encabezado: avatar + nombre + cerrar */}
               <View style={styles.storyViewerHeader}>
                 <View style={styles.storyViewerHeaderLeft}>
                   <View style={styles.storyViewerAvatarRing}>
@@ -393,7 +582,6 @@ export default function CalendarScreen() {
                 </TouchableOpacity>
               </View>
 
-              {/* Datos del lugar */}
               <View style={styles.storyViewerInfo} pointerEvents="none">
                 {!!activeStory.ubicacion && (
                   <View style={styles.storyViewerLocationRow}>
@@ -417,7 +605,6 @@ export default function CalendarScreen() {
                 )}
               </View>
 
-              {/* Acciones: me gusta, no me gusta, guardar */}
               <View style={styles.storyViewerActions}>
                 <TouchableOpacity
                   style={styles.storyViewerActionBtn}
@@ -431,12 +618,12 @@ export default function CalendarScreen() {
                 </TouchableOpacity>
                 <TouchableOpacity
                   style={styles.storyViewerActionBtn}
-                  onPress={() => onPressDislike(activeStory)}
+                  onPress={() => onPressStoryDislike(activeStory)}
                 >
                   <MaterialCommunityIcons
                     name={disliked[activeStory.id] ? 'thumb-down' : 'thumb-down-outline'}
                     size={24}
-                    color={disliked[activeStory.id] ? COLOR_DISLIKE : '#fff'}
+                    color={disliked[activeStory.id] ? '#FF5252' : '#fff'}
                   />
                 </TouchableOpacity>
                 <TouchableOpacity
@@ -459,77 +646,17 @@ export default function CalendarScreen() {
         </View>
       </Modal>
 
-      {/* Modal: motivos de "no me gusta" + comentario */}
-      <Modal
+      {/* Modal de "no me gusta" compartido (historias y publicaciones) */}
+      <DislikeReasonModal
         visible={dislikeModalVisible}
-        animationType="slide"
-        transparent
-        onRequestClose={closeDislikeModal}
-      >
-        <KeyboardAvoidingView
-          style={styles.dislikeBackdrop}
-          behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-        >
-          <View style={styles.dislikeSheet}>
-            <View style={styles.dislikeHandle} />
-            <Text style={styles.dislikeTitle}>¿Por qué no te gustó?</Text>
-            <Text style={styles.dislikeSubtitle}>
-              Selecciona una o varias opciones. Tu respuesta nos ayuda a mejorar.
-            </Text>
-
-            <ScrollView style={{ maxHeight: 260 }} showsVerticalScrollIndicator={false}>
-              {DISLIKE_REASONS.map((reason) => {
-                const isSelected = !!selectedReasons[reason.id];
-                return (
-                  <TouchableOpacity
-                    key={reason.id}
-                    style={styles.reasonRow}
-                    activeOpacity={0.8}
-                    onPress={() => toggleReasonOption(reason.id)}
-                  >
-                    <MaterialCommunityIcons
-                      name={isSelected ? 'checkbox-marked' : 'checkbox-blank-outline'}
-                      size={22}
-                      color={isSelected ? COLOR_TEAL : '#9AA3A8'}
-                    />
-                    <Text style={styles.reasonLabel}>{reason.label}</Text>
-                  </TouchableOpacity>
-                );
-              })}
-            </ScrollView>
-
-            <TextInput
-              style={styles.dislikeCommentInput}
-              placeholder="Cuéntanos más (opcional)"
-              placeholderTextColor="#9AA3A8"
-              value={dislikeComment}
-              onChangeText={setDislikeComment}
-              multiline
-            />
-
-            <View style={styles.dislikeActionsRow}>
-              <TouchableOpacity
-                style={styles.dislikeCancelBtn}
-                onPress={closeDislikeModal}
-                disabled={submittingDislike}
-              >
-                <Text style={styles.dislikeCancelText}>Cancelar</Text>
-              </TouchableOpacity>
-              <TouchableOpacity
-                style={styles.dislikeSubmitBtn}
-                onPress={submitDislike}
-                disabled={submittingDislike}
-              >
-                {submittingDislike ? (
-                  <ActivityIndicator color="#fff" size="small" />
-                ) : (
-                  <Text style={styles.dislikeSubmitText}>Enviar</Text>
-                )}
-              </TouchableOpacity>
-            </View>
-          </View>
-        </KeyboardAvoidingView>
-      </Modal>
+        selectedReasons={selectedReasons}
+        onToggleReason={toggleReasonOption}
+        comment={dislikeComment}
+        onChangeComment={setDislikeComment}
+        submitting={submittingDislike}
+        onCancel={closeDislikeModal}
+        onSubmit={submitDislike}
+      />
     </View>
   );
 }
@@ -537,7 +664,6 @@ export default function CalendarScreen() {
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: '#f6fafd' },
 
-  // Header
   headerFixed: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -548,9 +674,7 @@ const styles = StyleSheet.create({
     borderBottomWidth: 0.5,
     borderBottomColor: '#e0e3ea',
   },
-  headerSpacer: {
-    width: 40,
-  },
+  headerSpacer: { width: 40 },
   headerTitle: {
     flex: 1,
     textAlign: 'center',
@@ -559,15 +683,8 @@ const styles = StyleSheet.create({
     color: COLOR_OLIVE,
     fontFamily: 'Montserrat-Bold',
   },
-  headerUserWrap: {
-    width: 90,
-    alignItems: 'flex-end',
-  },
-  headerUserText: {
-    fontSize: 15,
-    fontWeight: '700',
-    color: COLOR_OLIVE,
-  },
+  headerUserWrap: { width: 90, alignItems: 'flex-end' },
+  headerUserText: { fontSize: 15, fontWeight: '700', color: COLOR_OLIVE },
 
   // Stories Carousel
   storiesSection: {
@@ -575,15 +692,8 @@ const styles = StyleSheet.create({
     borderBottomWidth: 6,
     borderBottomColor: '#f0f3f4',
   },
-  storiesRow: {
-    paddingHorizontal: 16,
-    gap: 14,
-  },
-  storyItem: {
-    alignItems: 'center',
-    marginRight: 14,
-    width: STORY_SIZE + 16,
-  },
+  storiesRow: { paddingHorizontal: 16, gap: 14 },
+  storyItem: { alignItems: 'center', marginRight: 14, width: STORY_SIZE + 16 },
   storyRingOuter: {
     width: STORY_SIZE + STORY_RING * 2,
     height: STORY_SIZE + STORY_RING * 2,
@@ -607,212 +717,44 @@ const styles = StyleSheet.create({
     borderWidth: 2,
     borderColor: '#fff',
   },
-  storyName: {
-    fontSize: 11.5,
-    color: '#333',
-    fontWeight: '600',
-    marginTop: 6,
-    textAlign: 'center',
-  },
+  storyName: { fontSize: 11.5, color: '#333', fontWeight: '600', marginTop: 6, textAlign: 'center' },
+
+  // Feed de publicaciones
+  feedSection: { paddingTop: 16 },
+  emptyFeedText: { textAlign: 'center', color: '#7A8489', fontSize: 13, marginTop: 24 },
 
   // Visor de historias (pantalla completa)
-  storyViewerContainer: {
-    flex: 1,
-    backgroundColor: '#000',
-  },
-  storyViewerImage: {
-    ...StyleSheet.absoluteFillObject,
-  },
+  storyViewerContainer: { flex: 1, backgroundColor: '#000' },
+  storyViewerImage: { ...StyleSheet.absoluteFillObject },
   storyViewerTopOverlay: {
-    position: 'absolute',
-    top: 0,
-    left: 0,
-    right: 0,
-    height: 160,
+    position: 'absolute', top: 0, left: 0, right: 0, height: 160,
     backgroundColor: 'rgba(0,0,0,0.45)',
   },
   storyViewerBottomOverlay: {
-    position: 'absolute',
-    bottom: 0,
-    left: 0,
-    right: 0,
-    height: 220,
+    position: 'absolute', bottom: 0, left: 0, right: 0, height: 220,
     backgroundColor: 'rgba(0,0,0,0.5)',
   },
-  storyProgressRow: {
-    position: 'absolute',
-    top: 14,
-    left: 12,
-    right: 12,
-  },
+  storyProgressRow: { position: 'absolute', top: 14, left: 12, right: 12 },
   storyProgressBarBg: {
-    height: 3,
-    borderRadius: 2,
-    backgroundColor: 'rgba(255,255,255,0.35)',
-    overflow: 'hidden',
+    height: 3, borderRadius: 2, backgroundColor: 'rgba(255,255,255,0.35)', overflow: 'hidden',
   },
-  storyProgressBarFill: {
-    width: '100%',
-    height: '100%',
-    backgroundColor: '#fff',
-  },
+  storyProgressBarFill: { width: '100%', height: '100%', backgroundColor: '#fff' },
   storyViewerHeader: {
-    position: 'absolute',
-    top: 28,
-    left: 14,
-    right: 14,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
+    position: 'absolute', top: 28, left: 14, right: 14,
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
   },
-  storyViewerHeaderLeft: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    flex: 1,
-    marginRight: 12,
-  },
+  storyViewerHeaderLeft: { flexDirection: 'row', alignItems: 'center', flex: 1, marginRight: 12 },
   storyViewerAvatarRing: {
-    width: 34,
-    height: 34,
-    borderRadius: 17,
-    borderWidth: 2,
-    borderColor: '#fff',
-    marginRight: 8,
-    overflow: 'hidden',
+    width: 34, height: 34, borderRadius: 17, borderWidth: 2, borderColor: '#fff',
+    marginRight: 8, overflow: 'hidden',
   },
-  storyViewerAvatar: {
-    width: '100%',
-    height: '100%',
-  },
-  storyViewerName: {
-    color: '#fff',
-    fontWeight: '700',
-    fontSize: 15,
-    flexShrink: 1,
-  },
-  storyViewerInfo: {
-    position: 'absolute',
-    left: 16,
-    right: 90,
-    bottom: 36,
-  },
-  storyViewerLocationRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    marginBottom: 6,
-  },
-  storyViewerLocationText: {
-    color: '#fff',
-    fontSize: 13,
-    fontWeight: '700',
-    marginLeft: 4,
-  },
-  storyViewerDesc: {
-    color: '#f0f0f0',
-    fontSize: 13,
-    lineHeight: 18,
-  },
-  storyViewerSavedLabel: {
-    color: COLOR_TEAL,
-    fontSize: 12,
-    fontWeight: '700',
-    marginTop: 8,
-  },
-  storyViewerActions: {
-    position: 'absolute',
-    right: 14,
-    bottom: 36,
-    alignItems: 'center',
-  },
-  storyViewerActionBtn: {
-    marginBottom: 22,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-
-  // Modal de motivos de "no me gusta"
-  dislikeBackdrop: {
-    flex: 1,
-    backgroundColor: 'rgba(0,0,0,0.45)',
-    justifyContent: 'flex-end',
-  },
-  dislikeSheet: {
-    backgroundColor: '#fff',
-    borderTopLeftRadius: 20,
-    borderTopRightRadius: 20,
-    paddingHorizontal: 20,
-    paddingTop: 10,
-    paddingBottom: 24,
-  },
-  dislikeHandle: {
-    width: 40,
-    height: 4,
-    borderRadius: 2,
-    backgroundColor: '#e0e3ea',
-    alignSelf: 'center',
-    marginBottom: 14,
-  },
-  dislikeTitle: {
-    fontSize: 17,
-    fontWeight: '700',
-    color: '#222',
-    marginBottom: 4,
-  },
-  dislikeSubtitle: {
-    fontSize: 12.5,
-    color: '#7A8489',
-    marginBottom: 14,
-    lineHeight: 17,
-  },
-  reasonRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingVertical: 10,
-  },
-  reasonLabel: {
-    fontSize: 14,
-    color: '#333',
-    marginLeft: 10,
-    flex: 1,
-  },
-  dislikeCommentInput: {
-    borderWidth: 1,
-    borderColor: '#E7ECEF',
-    borderRadius: 10,
-    paddingHorizontal: 12,
-    paddingVertical: 10,
-    fontSize: 13.5,
-    color: '#333',
-    minHeight: 70,
-    textAlignVertical: 'top',
-    marginTop: 10,
-  },
-  dislikeActionsRow: {
-    flexDirection: 'row',
-    justifyContent: 'flex-end',
-    marginTop: 16,
-    gap: 10,
-  },
-  dislikeCancelBtn: {
-    paddingHorizontal: 14,
-    paddingVertical: 12,
-  },
-  dislikeCancelText: {
-    color: COLOR_TEAL,
-    fontWeight: '700',
-    fontSize: 14,
-  },
-  dislikeSubmitBtn: {
-    backgroundColor: COLOR_TEAL,
-    borderRadius: 10,
-    paddingHorizontal: 20,
-    paddingVertical: 12,
-    minWidth: 90,
-    alignItems: 'center',
-  },
-  dislikeSubmitText: {
-    color: '#fff',
-    fontWeight: '700',
-    fontSize: 14,
-  },
+  storyViewerAvatar: { width: '100%', height: '100%' },
+  storyViewerName: { color: '#fff', fontWeight: '700', fontSize: 15, flexShrink: 1 },
+  storyViewerInfo: { position: 'absolute', left: 16, right: 90, bottom: 36 },
+  storyViewerLocationRow: { flexDirection: 'row', alignItems: 'center', marginBottom: 6 },
+  storyViewerLocationText: { color: '#fff', fontSize: 13, fontWeight: '700', marginLeft: 4 },
+  storyViewerDesc: { color: '#f0f0f0', fontSize: 13, lineHeight: 18 },
+  storyViewerSavedLabel: { color: COLOR_TEAL, fontSize: 12, fontWeight: '700', marginTop: 8 },
+  storyViewerActions: { position: 'absolute', right: 14, bottom: 36, alignItems: 'center' },
+  storyViewerActionBtn: { marginBottom: 22, alignItems: 'center', justifyContent: 'center' },
 });
