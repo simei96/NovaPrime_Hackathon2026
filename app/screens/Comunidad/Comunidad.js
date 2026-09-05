@@ -10,6 +10,7 @@ import {
   ActivityIndicator, Alert, Animated, Dimensions, Image, Linking, Modal,
   Platform, Pressable, ScrollView, StatusBar, StyleSheet, Text, TouchableOpacity, View,
 } from 'react-native';
+import Toast from '../../../components/common/Toast';
 import DislikeReasonModal from '../../../components/community/DislikeReasonModal';
 import PostCard from '../../../components/community/PostCard';
 import { auth, db } from '../../../firebaseConfig';
@@ -28,6 +29,11 @@ const STORY_RING = 3;
 
 // Duración de cada historia antes de avanzar automáticamente a la siguiente
 const STORY_DURATION_MS = 5000;
+
+// Si una carga en tiempo real (onSnapshot) no responde en este tiempo —por
+// ejemplo, sin conexión y sin datos en caché local—, dejamos de mostrar el
+// spinner infinito y pasamos a un estado de error/aviso.
+const LOAD_TIMEOUT_MS = 8000;
 
 // Devuelve el valor solo si es un string renderizable; si es un GeoPoint,
 // Timestamp, DocumentReference u otro objeto de Firestore, devuelve '' en
@@ -66,6 +72,38 @@ function openDirections(geoPoint) {
   Linking.openURL(nativeUrl).catch(() => Linking.openURL(webUrl));
 }
 
+// Imagen con manejo de error: si la URL no carga (por ejemplo, sin
+// conexión a internet), se muestra un ícono de respaldo en vez de dejar un
+// hueco vacío o el ícono de imagen rota nativo del sistema operativo.
+function ImageWithFallback({
+  uri,
+  style,
+  resizeMode = 'cover',
+  fallbackIcon = 'image-off-outline',
+  fallbackIconSize = 20,
+  fallbackIconColor = '#fff',
+  fallbackBackgroundColor = COLOR_TEAL,
+}) {
+  const [failed, setFailed] = useState(false);
+
+  if (!uri || failed) {
+    return (
+      <View style={[style, styles.imageFallback, { backgroundColor: fallbackBackgroundColor }]}>
+        <MaterialCommunityIcons name={fallbackIcon} size={fallbackIconSize} color={fallbackIconColor} />
+      </View>
+    );
+  }
+
+  return (
+    <Image
+      source={{ uri }}
+      style={style}
+      resizeMode={resizeMode}
+      onError={() => setFailed(true)}
+    />
+  );
+}
+
 const FALLBACK_STORIES = [
   {
     id: 'story-1',
@@ -100,6 +138,11 @@ export default function CalendarScreen() {
   // Historias (colección "Lugares")
   const [stories, setStories] = useState([]);
   const [loadingStories, setLoadingStories] = useState(true);
+  const [storiesError, setStoriesError] = useState(false);
+  const [storiesReloadKey, setStoriesReloadKey] = useState(0);
+  const storiesTimeoutRef = useRef(null);
+  const toastShownForStoriesError = useRef(false);
+
   const [storyModalVisible, setStoryModalVisible] = useState(false);
   const [activeStoryIndex, setActiveStoryIndex] = useState(0);
   const [activeStory, setActiveStory] = useState(null);
@@ -116,6 +159,10 @@ export default function CalendarScreen() {
   // Feed de publicaciones
   const [posts, setPosts] = useState([]);
   const [loadingPosts, setLoadingPosts] = useState(true);
+  const [postsError, setPostsError] = useState(false);
+  const [postsReloadKey, setPostsReloadKey] = useState(0);
+  const postsTimeoutRef = useRef(null);
+
   const [interactionsMap, setInteractionsMap] = useState({});
   const [savedPostsMap, setSavedPostsMap] = useState({});
   const [lugarNombres, setLugarNombres] = useState({});
@@ -130,17 +177,46 @@ export default function CalendarScreen() {
   const [dislikeComment, setDislikeComment] = useState('');
   const [submittingDislike, setSubmittingDislike] = useState(false);
 
+  // Aviso no intrusivo (toast) para errores que no bloquean el flujo del
+  // usuario: acciones optimistas (like, guardar, quitar dislike) y avisos
+  // de "sin conexión, mostrando datos de muestra".
+  const [toast, setToast] = useState({ visible: false, message: '', type: 'error' });
+
+  function showToast(message, type = 'error') {
+    setToast({ visible: true, message, type });
+  }
+  function hideToast() {
+    setToast((prev) => ({ ...prev, visible: false }));
+  }
+
   useEffect(() => {
     const unsub = onAuthStateChanged(auth, (u) => setUser(u));
     return () => unsub && unsub();
   }, []);
 
-  // Stories Carousel: reutiliza la colección "Lugares" (misma que Home/Búsqueda)
+  // Stories Carousel: reutiliza la colección "Lugares" (misma que Home/Búsqueda).
+  // Si no hay respuesta a tiempo (sin conexión y sin caché), no dejamos el
+  // spinner girando para siempre: mostramos las historias de muestra y un
+  // aviso discreto.
   useEffect(() => {
+    setLoadingStories(true);
+    setStoriesError(false);
+    toastShownForStoriesError.current = false;
+
+    storiesTimeoutRef.current = setTimeout(() => {
+      setLoadingStories(false);
+      setStoriesError(true);
+      if (!toastShownForStoriesError.current) {
+        toastShownForStoriesError.current = true;
+        showToast('Sin conexión: mostrando destinos de muestra.', 'info');
+      }
+    }, LOAD_TIMEOUT_MS);
+
     const ref = collection(db, 'Lugares');
     const unsub = onSnapshot(
       ref,
       (snap) => {
+        clearTimeout(storiesTimeoutRef.current);
         const mapped = snap.docs
           .map((d) => {
             const v = d.data();
@@ -159,24 +235,46 @@ export default function CalendarScreen() {
           .filter((s) => !!s.imageURL);
         setStories(mapped);
         setLoadingStories(false);
+        setStoriesError(false);
       },
       (err) => {
+        clearTimeout(storiesTimeoutRef.current);
         console.warn('Error cargando historias (Lugares):', err);
         setLoadingStories(false);
+        setStoriesError(true);
+        if (!toastShownForStoriesError.current) {
+          toastShownForStoriesError.current = true;
+          showToast('Sin conexión: mostrando destinos de muestra.', 'info');
+        }
       },
     );
-    return () => unsub();
-  }, []);
+    return () => {
+      clearTimeout(storiesTimeoutRef.current);
+      unsub();
+    };
+  }, [storiesReloadKey]);
 
   // Publicaciones de la comunidad, en tiempo real, más recientes primero.
+  // Aquí sí distinguimos "sin publicaciones" de "no se pudo cargar": el
+  // feed no tiene un buen contenido de respaldo como las historias.
   useEffect(() => {
+    setLoadingPosts(true);
+    setPostsError(false);
+
+    postsTimeoutRef.current = setTimeout(() => {
+      setLoadingPosts(false);
+      setPostsError(true);
+    }, LOAD_TIMEOUT_MS);
+
     const q = query(collection(db, 'ComunidadPosts'), orderBy('creadoEn', 'desc'));
     const unsub = onSnapshot(
       q,
       (snap) => {
+        clearTimeout(postsTimeoutRef.current);
         const mapped = snap.docs.map((d) => ({ publicacionId: d.id, ...d.data() }));
         setPosts(mapped);
         setLoadingPosts(false);
+        setPostsError(false);
 
         mapped.forEach((post) => {
           const ref = post.contenidoId;
@@ -191,17 +289,24 @@ export default function CalendarScreen() {
               setLugarNombres((prev) => ({ ...prev, [ref.path]: nombre }));
             })
             .catch(() => {
+              // Fallo menor: el nombre del lugar simplemente no se mostrará
+              // en ese post. No interrumpimos al usuario por esto.
               lugarNombresCache.current[ref.path] = '';
             });
         });
       },
       (err) => {
+        clearTimeout(postsTimeoutRef.current);
         console.warn('Error cargando publicaciones (ComunidadPosts):', err);
         setLoadingPosts(false);
+        setPostsError(true);
       },
     );
-    return () => unsub();
-  }, []);
+    return () => {
+      clearTimeout(postsTimeoutRef.current);
+      unsub();
+    };
+  }, [postsReloadKey]);
 
   useEffect(() => {
     if (!activePost) return;
@@ -294,6 +399,7 @@ export default function CalendarScreen() {
       }
     } catch (e) {
       console.warn('Error cargando datos del lugar:', e);
+      showToast('No se pudo cargar el detalle completo de este destino.', 'error');
     } finally {
       setLoadingStoryDetail(false);
     }
@@ -400,7 +506,7 @@ export default function CalendarScreen() {
       setSavedStories((prev) => ({ ...prev, [story.id]: true }));
     } catch (e) {
       console.warn('Error guardando favorito:', e);
-      Alert.alert('Error', 'No se pudo guardar la historia en favoritos.');
+      showToast('No se pudo guardar la historia en favoritos.', 'error');
     } finally {
       setSavingStory(false);
     }
@@ -434,7 +540,7 @@ export default function CalendarScreen() {
       }
     } catch (e) {
       console.warn('Error actualizando me gusta:', e);
-      Alert.alert('Error', 'No se pudo actualizar tu reacción.');
+      showToast('No se pudo actualizar tu reacción. Revisa tu conexión.', 'error');
     }
   }
 
@@ -446,9 +552,10 @@ export default function CalendarScreen() {
     }
     const existing = interactionsMap[post.publicacionId];
     if (existing && existing.tipo === 'noMeGusta') {
-      deleteDoc(doc(db, 'InteraccionesPublicaciones', existing.docId)).catch((e) =>
-        console.warn('Error quitando no me gusta:', e),
-      );
+      deleteDoc(doc(db, 'InteraccionesPublicaciones', existing.docId)).catch((e) => {
+        console.warn('Error quitando no me gusta:', e);
+        showToast('No se pudo actualizar tu reacción. Revisa tu conexión.', 'error');
+      });
       return;
     }
     setDislikeTarget({ type: 'post', item: post });
@@ -477,7 +584,7 @@ export default function CalendarScreen() {
       }
     } catch (e) {
       console.warn('Error actualizando favorito:', e);
-      Alert.alert('Error', 'No se pudo actualizar tus favoritos.');
+      showToast('No se pudo actualizar tus favoritos. Revisa tu conexión.', 'error');
     }
   }
 
@@ -552,8 +659,11 @@ export default function CalendarScreen() {
       }
       setDislikeModalVisible(false);
     } catch (e) {
+      // Esta es una acción de formulario deliberada (el usuario llenó
+      // motivos y presionó enviar): aquí sí conviene un Alert bloqueante,
+      // ya que el modal permanece abierto para que pueda reintentar.
       console.warn('Error guardando el motivo de no me gusta:', e);
-      Alert.alert('Error', 'No se pudo guardar tu respuesta. Intenta de nuevo.');
+      Alert.alert('Error', 'No se pudo guardar tu respuesta. Revisa tu conexión e intenta de nuevo.');
     } finally {
       setSubmittingDislike(false);
     }
@@ -583,6 +693,13 @@ export default function CalendarScreen() {
 
   return (
     <View style={styles.container}>
+      <Toast
+        visible={toast.visible}
+        message={toast.message}
+        type={toast.type}
+        onHide={hideToast}
+      />
+
       {/* Header: flecha, usuario + avatar a la derecha */}
       <View style={styles.headerFixed}>
         <TouchableOpacity
@@ -605,13 +722,12 @@ export default function CalendarScreen() {
           <Text style={styles.headerUserText} numberOfLines={1}>
             {headerDisplayName}
           </Text>
-          {user?.photoURL ? (
-            <Image source={{ uri: user.photoURL }} style={styles.headerUserAvatar} />
-          ) : (
-            <View style={[styles.headerUserAvatar, styles.headerUserAvatarPlaceholder]}>
-              <MaterialCommunityIcons name="account" size={14} color="#fff" />
-            </View>
-          )}
+          <ImageWithFallback
+            uri={user?.photoURL}
+            style={styles.headerUserAvatar}
+            fallbackIcon="account"
+            fallbackIconSize={14}
+          />
         </TouchableOpacity>
       </View>
 
@@ -642,10 +758,10 @@ export default function CalendarScreen() {
                 >
                   <View style={styles.storyRingOuter}>
                     <View style={styles.storyRingInner}>
-                      <Image
-                        source={{ uri: s.imageURL }}
+                      <ImageWithFallback
+                        uri={s.imageURL}
                         style={styles.storyImage}
-                        resizeMode="cover"
+                        fallbackIconSize={22}
                       />
                     </View>
                   </View>
@@ -656,12 +772,33 @@ export default function CalendarScreen() {
               ))}
             </ScrollView>
           )}
+          {storiesError && !loadingStories && (
+            <Text style={styles.storiesOfflineNote}>
+              Sin conexión: mostrando destinos de muestra.
+            </Text>
+          )}
         </View>
 
         {/* Feed de publicaciones de la comunidad */}
         <View style={styles.feedSection}>
           {loadingPosts ? (
             <ActivityIndicator size="small" color={COLOR_TEAL} style={{ marginVertical: 20 }} />
+          ) : postsError ? (
+            <View style={styles.inlineErrorBox}>
+              <MaterialCommunityIcons name="wifi-off" size={22} color={COLOR_TEXT_MUTED} />
+              <Text style={styles.inlineErrorTitle}>No se pudo cargar el feed</Text>
+              <Text style={styles.inlineErrorSubtitle}>
+                Revisa tu conexión a internet e inténtalo de nuevo.
+              </Text>
+              <TouchableOpacity
+                style={styles.retryBtn}
+                activeOpacity={0.85}
+                onPress={() => setPostsReloadKey((k) => k + 1)}
+              >
+                <MaterialCommunityIcons name="refresh" size={16} color="#fff" style={{ marginRight: 6 }} />
+                <Text style={styles.retryBtnText}>Reintentar</Text>
+              </TouchableOpacity>
+            </View>
           ) : posts.length === 0 ? (
             <Text style={styles.emptyFeedText}>Todavía no hay publicaciones activas.</Text>
           ) : (
@@ -699,10 +836,10 @@ export default function CalendarScreen() {
         <View style={styles.storyViewerContainer}>
           {activeStory && (
             <>
-              <Image
-                source={{ uri: activeStory.imageURL }}
+              <ImageWithFallback
+                uri={activeStory.imageURL}
                 style={styles.storyViewerImage}
-                resizeMode="cover"
+                fallbackIconSize={36}
               />
               <View style={styles.storyViewerTopOverlay} />
               <View style={styles.storyViewerBottomOverlay} />
@@ -740,9 +877,10 @@ export default function CalendarScreen() {
               <View style={styles.storyViewerHeader}>
                 <View style={styles.storyViewerHeaderLeft}>
                   <View style={styles.storyViewerAvatarRing}>
-                    <Image
-                      source={{ uri: activeStory.imageURL }}
+                    <ImageWithFallback
+                      uri={activeStory.imageURL}
                       style={styles.storyViewerAvatar}
+                      fallbackIconSize={16}
                     />
                   </View>
                   <View>
@@ -857,31 +995,23 @@ export default function CalendarScreen() {
         <View style={styles.storyViewerContainer}>
           {activePost && (
             <>
-              {activePost.imagenURL ? (
-                <Image
-                  source={{ uri: activePost.imagenURL }}
-                  style={styles.storyViewerImage}
-                  resizeMode="cover"
-                />
-              ) : (
-                <View style={[styles.storyViewerImage, { backgroundColor: COLOR_TEAL }]} />
-              )}
+              <ImageWithFallback
+                uri={activePost.imagenURL}
+                style={styles.storyViewerImage}
+                fallbackIconSize={36}
+              />
               <View style={styles.storyViewerTopOverlay} />
               <View style={styles.storyViewerBottomOverlay} />
 
               <View style={styles.storyViewerHeader}>
                 <View style={styles.storyViewerHeaderLeft}>
                   <View style={styles.storyViewerAvatarRing}>
-                    {activePost.fotoPerfilURL ? (
-                      <Image
-                        source={{ uri: activePost.fotoPerfilURL }}
-                        style={styles.storyViewerAvatar}
-                      />
-                    ) : (
-                      <View style={[styles.storyViewerAvatar, styles.postViewerAvatarPlaceholder]}>
-                        <MaterialCommunityIcons name="account" size={16} color="#fff" />
-                      </View>
-                    )}
+                    <ImageWithFallback
+                      uri={activePost.fotoPerfilURL}
+                      style={styles.storyViewerAvatar}
+                      fallbackIcon="account"
+                      fallbackIconSize={16}
+                    />
                   </View>
                   <View style={{ flexShrink: 1 }}>
                     <Text style={styles.storyViewerName} numberOfLines={1}>
@@ -1017,8 +1147,10 @@ const styles = StyleSheet.create({
   headerUserWrap: { flexDirection: 'row', alignItems: 'center' },
   headerUserText: { fontSize: 13.5, fontWeight: '700', color: '#333', marginRight: 8 },
   headerUserAvatar: { width: 28, height: 28, borderRadius: 14 },
-  headerUserAvatarPlaceholder: {
-    backgroundColor: COLOR_TEAL,
+
+  // Fallback genérico para cualquier imagen que no cargue (sin conexión,
+  // URL rota, etc.)
+  imageFallback: {
     alignItems: 'center',
     justifyContent: 'center',
   },
@@ -1055,10 +1187,49 @@ const styles = StyleSheet.create({
     borderColor: '#fff',
   },
   storyName: { fontSize: 11.5, color: '#333', fontWeight: '600', marginTop: 6, textAlign: 'center' },
+  storiesOfflineNote: {
+    textAlign: 'center',
+    fontSize: 11,
+    color: COLOR_TEXT_MUTED,
+    marginTop: 4,
+  },
 
   // Feed de publicaciones
   feedSection: { paddingTop: 16 },
   emptyFeedText: { textAlign: 'center', color: COLOR_TEXT_MUTED, fontSize: 13, marginTop: 24 },
+
+  // Bloque de error inline con botón de reintentar (usado en el feed)
+  inlineErrorBox: {
+    alignItems: 'center',
+    paddingVertical: 28,
+    paddingHorizontal: 24,
+  },
+  inlineErrorTitle: {
+    marginTop: 8,
+    fontSize: 14,
+    fontWeight: '700',
+    color: '#333',
+  },
+  inlineErrorSubtitle: {
+    marginTop: 4,
+    fontSize: 12.5,
+    color: COLOR_TEXT_MUTED,
+    textAlign: 'center',
+  },
+  retryBtn: {
+    marginTop: 14,
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: COLOR_TEAL,
+    paddingVertical: 9,
+    paddingHorizontal: 18,
+    borderRadius: 20,
+  },
+  retryBtnText: {
+    color: '#fff',
+    fontSize: 13,
+    fontWeight: '700',
+  },
 
   // Visor a pantalla completa (compartido: historias y publicaciones)
   storyViewerContainer: { flex: 1, backgroundColor: '#000' },
@@ -1109,11 +1280,6 @@ const styles = StyleSheet.create({
     marginRight: 8, overflow: 'hidden',
   },
   storyViewerAvatar: { width: '100%', height: '100%' },
-  postViewerAvatarPlaceholder: {
-    backgroundColor: COLOR_TEAL,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
   storyViewerName: { color: '#fff', fontWeight: '700', fontSize: 15, flexShrink: 1 },
   storyViewerSubtitle: { color: 'rgba(255,255,255,0.75)', fontSize: 11.5, marginTop: 1 },
   storyCloseBtn: {

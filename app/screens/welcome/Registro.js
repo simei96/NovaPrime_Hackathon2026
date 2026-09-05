@@ -73,6 +73,15 @@ export default function Registro() {
   const [fullNameStatus, setFullNameStatus] = useState('idle');
   const [usernameStatus, setUsernameStatus] = useState('idle');
 
+  // Estado de verificación de correo (UI preparada, sin lógica real todavía).
+  // Cuando se active de verdad, esto se conectaría a algo como
+  // sendEmailVerification(cred.user) de firebase/auth o a un backend propio
+  // que genere y valide un código (OTP).
+  const [emailVerificado, setEmailVerificado] = useState(false);
+  const [verificacionEnviada, setVerificacionEnviada] = useState(false);
+  const [enviandoCodigo, setEnviandoCodigo] = useState(false);
+  const [codigoVerificacion, setCodigoVerificacion] = useState('');
+
   const [errors, setErrors] = useState({
     fullName: '',
     username: '',
@@ -179,6 +188,49 @@ export default function Registro() {
   }));
   const passwordIsStrong = passwordChecks.every((r) => r.passed);
 
+  // Si el usuario cambia el correo después de haberlo "verificado" o de
+  // haber enviado un código, reiniciamos ese estado para evitar que quede
+  // un correo distinto marcado como verificado.
+  const handleChangeEmail = (t) => {
+    setEmail(t);
+    clearError('email');
+    if (emailVerificado || verificacionEnviada) {
+      setEmailVerificado(false);
+      setVerificacionEnviada(false);
+      setCodigoVerificacion('');
+    }
+  };
+
+  // TODO: reemplazar con el envío real del código/enlace de verificación.
+  // Ejemplos de implementación futura:
+  //  - firebase/auth: sendEmailVerification(cred.user) (requiere haber
+  //    creado ya el usuario, o crear una cuenta temporal antes).
+  //  - Backend propio: generar un OTP, guardarlo con expiración y
+  //    enviarlo por correo (SendGrid, SES, etc.).
+  const handleEnviarCodigoVerificacion = async () => {
+    if (!isValidEmail(email)) {
+      Alert.alert('Correo inválido', 'Ingresa un correo válido antes de verificarlo.');
+      return;
+    }
+    setEnviandoCodigo(true);
+    // Simulación de envío; aquí iría la llamada real al servicio.
+    setTimeout(() => {
+      setVerificacionEnviada(true);
+      setEnviandoCodigo(false);
+    }, 800);
+  };
+
+  // TODO: reemplazar con la validación real del código contra el backend
+  // o con la confirmación del enlace de verificación de Firebase.
+  const handleConfirmarCodigoVerificacion = () => {
+    if (!codigoVerificacion.trim()) {
+      Alert.alert('Código requerido', 'Ingresa el código que enviamos a tu correo.');
+      return;
+    }
+    // Simulación: aquí se validaría el código real contra el backend.
+    setEmailVerificado(true);
+  };
+
   const validate = () => {
     const next = {
       fullName: '',
@@ -216,6 +268,13 @@ export default function Registro() {
       next.email = 'Ingresa un correo válido';
       ok = false;
     }
+    // Nota: la verificación de correo (emailVerificado) todavía NO es
+    // obligatoria para poder registrarse. Cuando se active de verdad,
+    // basta con agregar aquí algo como:
+    // else if (!emailVerificado) {
+    //   next.email = 'Verifica tu correo antes de continuar';
+    //   ok = false;
+    // }
 
     if (!password) {
       next.password = 'Ingresa una contraseña';
@@ -279,6 +338,10 @@ export default function Registro() {
 
       await updateProfile(cred.user, { displayName: username.trim() });
 
+      // TODO: cuando se active la verificación real, este sería el lugar
+      // natural para llamar a sendEmailVerification(cred.user) de
+      // firebase/auth, justo después de crear la cuenta.
+
       // Datos adicionales se guardan en Firestore, en Users/{uid}. Se
       // agregan nombreLower / nombreUsuarioLower para poder validar
       // unicidad sin distinguir mayúsculas/minúsculas.
@@ -288,6 +351,7 @@ export default function Registro() {
         nombreUsuario: username.trim(),
         nombreUsuarioLower: usernameLower,
         email: email.trim(),
+        emailVerificado: false, // placeholder: reflejar el estado real cuando exista
         intereses: selectedGustos,
         departamentoPreferido: null,
         fotoPerfilURL: null,
@@ -415,7 +479,7 @@ export default function Registro() {
               <TextInput
                 style={styles.input}
                 value={email}
-                onChangeText={(t) => { setEmail(t); clearError('email'); }}
+                onChangeText={handleChangeEmail}
                 placeholder="tu@email.com"
                 placeholderTextColor="#a7b0b4"
                 keyboardType="email-address"
@@ -423,6 +487,61 @@ export default function Registro() {
               />
             </View>
             {!!errors.email && <Text style={styles.errorText}>{errors.email}</Text>}
+
+            {/* Verificación de correo: UI preparada, sin lógica real todavía */}
+            {email.trim() !== '' && isValidEmail(email) && !emailVerificado && (
+              <View style={styles.verificationBox}>
+                {!verificacionEnviada ? (
+                  <TouchableOpacity
+                    style={styles.verifyLinkBtn}
+                    onPress={handleEnviarCodigoVerificacion}
+                    disabled={enviandoCodigo}
+                  >
+                    {enviandoCodigo ? (
+                      <ActivityIndicator size="small" color={COLOR_TEAL} />
+                    ) : (
+                      <Text style={styles.verifyLinkText}>Verificar mi correo</Text>
+                    )}
+                  </TouchableOpacity>
+                ) : (
+                  <>
+                    <Text style={styles.helperText}>
+                      Te enviamos un código a {email.trim()} (función pendiente de activar).
+                    </Text>
+                    <View style={styles.inputRow}>
+                      <MaterialCommunityIcons
+                        name="shield-check-outline"
+                        size={18}
+                        color={COLOR_TEXT_MUTED}
+                        style={styles.inputIcon}
+                      />
+                      <TextInput
+                        style={styles.input}
+                        value={codigoVerificacion}
+                        onChangeText={setCodigoVerificacion}
+                        placeholder="Código de verificación"
+                        placeholderTextColor="#a7b0b4"
+                        keyboardType="number-pad"
+                      />
+                    </View>
+                    <View style={styles.verifyBtnRow}>
+                      <TouchableOpacity style={styles.verifyLinkBtn} onPress={handleConfirmarCodigoVerificacion}>
+                        <Text style={styles.verifyLinkText}>Confirmar código</Text>
+                      </TouchableOpacity>
+                      <TouchableOpacity style={styles.verifyLinkBtn} onPress={handleEnviarCodigoVerificacion}>
+                        <Text style={styles.verifyLinkText}>Reenviar</Text>
+                      </TouchableOpacity>
+                    </View>
+                  </>
+                )}
+              </View>
+            )}
+            {emailVerificado && (
+              <View style={styles.verifiedBadgeRow}>
+                <MaterialCommunityIcons name="check-decagram" size={16} color={COLOR_TEAL} />
+                <Text style={styles.successText}>  Correo verificado</Text>
+              </View>
+            )}
 
             {/* Contraseña */}
             <Text style={[styles.fieldLabel, styles.fieldSpacing]}>Contraseña</Text>
@@ -435,7 +554,7 @@ export default function Registro() {
                 placeholder="Crea una contraseña segura"
                 placeholderTextColor="#a7b0b4"
                 secureTextEntry={!showPassword}
-                onFocus={() => { setShowPasswordRules(true); scrollToBottom(); }}
+                onFocus={() => setShowPasswordRules(true)}
               />
               <TouchableOpacity onPress={() => setShowPassword((v) => !v)} hitSlop={8}>
                 <MaterialCommunityIcons
@@ -481,7 +600,7 @@ export default function Registro() {
                 placeholder="Repite tu contraseña"
                 placeholderTextColor="#a7b0b4"
                 secureTextEntry={!showConfirm}
-                onFocus={scrollToBottom}
+                onFocus={() => setShowPasswordRules(true)}
               />
               <TouchableOpacity onPress={() => setShowConfirm((v) => !v)} hitSlop={8}>
                 <MaterialCommunityIcons
@@ -764,6 +883,39 @@ const styles = StyleSheet.create({
     fontSize: 12,
     marginTop: 4,
     fontFamily: 'Montserrat-Regular',
+  },
+
+  // Verificación de correo (preparado, sin lógica real)
+  verificationBox: {
+    marginTop: 8,
+    padding: 10,
+    borderRadius: 10,
+    backgroundColor: '#fafdfd',
+    borderWidth: 1,
+    borderColor: COLOR_TEAL_SOFT,
+  },
+  verifyLinkBtn: {
+    alignSelf: 'flex-start',
+    paddingVertical: 6,
+    paddingHorizontal: 10,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: COLOR_TEAL,
+  },
+  verifyLinkText: {
+    color: COLOR_TEAL,
+    fontSize: 12.5,
+    fontFamily: 'Montserrat-SemiBold',
+  },
+  verifyBtnRow: {
+    flexDirection: 'row',
+    gap: 10,
+    marginTop: 8,
+  },
+  verifiedBadgeRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginTop: 4,
   },
 
   // Checklist de requisitos de contraseña
